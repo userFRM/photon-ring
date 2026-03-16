@@ -54,6 +54,7 @@ pub mod channel;
 pub mod mem;
 pub(crate) mod ring;
 pub(crate) mod slot;
+mod typed_bus;
 pub mod wait;
 
 pub use bus::Photon;
@@ -61,4 +62,5 @@ pub use channel::{
     channel, channel_bounded, channel_mpmc, MpPublisher, PublishError, Publisher, Subscribable,
     Subscriber, SubscriberGroup, TryRecvError,
 };
+pub use typed_bus::TypedBus;
 pub use wait::WaitStrategy;

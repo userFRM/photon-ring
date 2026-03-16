@@ -12,6 +12,23 @@
 //! | `YieldSpin` | Low (~30 ns on x86) | High | Shared cores, SMT |
 //! | `BackoffSpin` | Medium (exponential) | Decreasing | Background consumers |
 //! | `Adaptive` | Auto-scaling | Varies | General purpose |
+//!
+//! # Platform-specific optimizations
+//!
+//! On **aarch64**, `YieldSpin` and `BackoffSpin` use the `WFE` (Wait For
+//! Event) instruction instead of `core::hint::spin_loop()` (which maps to
+//! `YIELD`). `WFE` puts the core into a low-power state until an event —
+//! such as a cache line invalidation from the publisher's store — wakes it.
+//! The `SEVL` + `WFE` pattern is used: `SEVL` sets the local event register
+//! so the first `WFE` doesn't block unconditionally.
+//!
+//! On **x86/x86_64**, `core::hint::spin_loop()` emits `PAUSE`, which is the
+//! standard spin-wait hint (~140 cycles on Skylake+).
+//!
+// NOTE: Intel Tremont+ CPUs support UMWAIT/TPAUSE instructions for
+// user-mode cache line monitoring. These would allow near-zero latency
+// wakeup without burning CPU. Not yet implemented — requires CPUID
+// feature detection (WAITPKG) and is only available on recent Intel.
 
 /// Strategy for blocking `recv()` and `SubscriberGroup::recv()`.
 ///
@@ -71,13 +88,31 @@ impl WaitStrategy {
                 // No hint — pure busy loop. Fastest wakeup, highest power.
             }
             WaitStrategy::YieldSpin => {
-                // PAUSE on x86, YIELD on ARM, WFE-hint on RISC-V.
+                // On aarch64: SEVL + WFE puts the core into a low-power
+                // state until a cache-line event wakes it. SEVL sets the
+                // local event register so the first WFE returns immediately
+                // (avoids unconditional blocking).
+                // On x86: PAUSE yields the pipeline to the SMT sibling.
+                #[cfg(target_arch = "aarch64")]
+                unsafe {
+                    core::arch::asm!("sevl", options(nomem, nostack));
+                    core::arch::asm!("wfe", options(nomem, nostack));
+                }
+                #[cfg(not(target_arch = "aarch64"))]
                 core::hint::spin_loop();
             }
             WaitStrategy::BackoffSpin => {
-                // Exponential backoff: more PAUSE iterations as we wait longer.
+                // Exponential backoff: more iterations as we wait longer.
+                // On aarch64: WFE sleeps until a cache-line event, making
+                // each iteration near-zero power. On x86: PAUSE yields the
+                // pipeline with ~140 cycle delay per iteration.
                 let pauses = 1u32.wrapping_shl(iter.min(6)); // 1, 2, 4, 8, 16, 32, 64
                 for _ in 0..pauses {
+                    #[cfg(target_arch = "aarch64")]
+                    unsafe {
+                        core::arch::asm!("wfe", options(nomem, nostack));
+                    }
+                    #[cfg(not(target_arch = "aarch64"))]
                     core::hint::spin_loop();
                 }
             }

@@ -1,6 +1,6 @@
 [package]
 name = "photon-ring"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.70"
 description = "Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."
@@ -19,10 +19,10 @@ hugepages = ["dep:libc"]
 [dependencies]
 hashbrown = "0.16.1"
 spin = "0.10.0"
-libc = { version = "0.2", default-features = false, optional = true }
+libc = { version = "0.2.183", default-features = false, optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "freebsd", target_os = "netbsd", target_os = "android"))'.dependencies]
-core_affinity2 = "0.15"
+core_affinity2 = "0.15.4"
 
 [dev-dependencies]
 criterion = "0.8.2"

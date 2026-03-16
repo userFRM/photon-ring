@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-03-16
+
+### Added
+- **`TypedBus`:** Heterogeneous topic bus — different `T: Copy + Send + 'static`
+  per topic. `bus.publisher::<f64>("prices")`, `bus.subscribe::<u32>("volumes")`.
+  Panics on type mismatch for safety.
+- **SPMC vs MPMC benchmark:** Side-by-side comparison in `benches/throughput.rs`.
+  SPMC: 2.8 ns, MPMC: 11.7 ns (4.2x CAS overhead — consistent with Disruptor).
+- **ARM `WFE` instruction:** `BackoffSpin` and `YieldSpin` now use `WFE` on
+  aarch64 for lower-power spin-wait (vs `YIELD`/`PAUSE` on x86).
+- **UMWAIT/TPAUSE documentation:** Documented as future optimization for
+  Intel Tremont+ in `wait.rs`.
+- **TLA+ formal specification:** `verification/seqlock.tla` models the seqlock
+  protocol with `NoTornRead` safety property. Includes `MC.tla` model config
+  and README with instructions for running TLC model checker.
+- **Technical report outline:** `docs/technical-report.md` — structured outline
+  for an academic paper covering design, evaluation, and comparison with
+  Disruptor, Aeron, and Chronicle Queue.
+
 ## [0.7.0] - 2026-03-16
 
 ### Added

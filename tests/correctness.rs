@@ -1,7 +1,9 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use photon_ring::{channel, channel_bounded, channel_mpmc, Photon, PublishError, TryRecvError};
+use photon_ring::{
+    channel, channel_bounded, channel_mpmc, Photon, PublishError, TryRecvError, TypedBus,
+};
 
 // -------------------------------------------------------------------------
 // Basic publish / receive
@@ -1335,4 +1337,65 @@ fn mpmc_clone_is_independent() {
     assert_eq!(sub.try_recv(), Ok(10));
     assert_eq!(sub.try_recv(), Ok(20));
     assert_eq!(sub.try_recv(), Ok(30));
+}
+
+// -------------------------------------------------------------------------
+// TypedBus (heterogeneous typed topics)
+// -------------------------------------------------------------------------
+
+#[test]
+fn typed_bus_basic() {
+    let bus = TypedBus::new(64);
+
+    let mut price_pub = bus.publisher::<f64>("prices");
+    let mut vol_pub = bus.publisher::<u32>("volumes");
+
+    let mut price_sub = bus.subscribe::<f64>("prices");
+    let mut vol_sub = bus.subscribe::<u32>("volumes");
+
+    price_pub.publish(42.5);
+    vol_pub.publish(1000);
+
+    assert_eq!(price_sub.try_recv(), Ok(42.5));
+    assert_eq!(vol_sub.try_recv(), Ok(1000));
+
+    // Cross-topic isolation
+    assert_eq!(price_sub.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(vol_sub.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[test]
+#[should_panic(expected = "exists with type")]
+fn typed_bus_type_mismatch_panics() {
+    let bus = TypedBus::new(64);
+
+    // Create "prices" as f64
+    let _pub = bus.publisher::<f64>("prices");
+
+    // Attempting to subscribe as u32 should panic
+    let _sub = bus.subscribe::<u32>("prices");
+}
+
+#[test]
+fn typed_bus_multiple_subscribers() {
+    let bus = TypedBus::new(64);
+
+    let mut pub_ = bus.publisher::<u64>("events");
+    let mut s1 = bus.subscribe::<u64>("events");
+    let mut s2 = bus.subscribe::<u64>("events");
+    let mut s3 = bus.subscribe::<u64>("events");
+
+    pub_.publish(42);
+
+    assert_eq!(s1.try_recv(), Ok(42));
+    assert_eq!(s2.try_recv(), Ok(42));
+    assert_eq!(s3.try_recv(), Ok(42));
+}
+
+#[test]
+#[should_panic(expected = "publisher already taken")]
+fn typed_bus_publisher_once() {
+    let bus = TypedBus::new(64);
+    let _p1 = bus.publisher::<u64>("topic");
+    let _p2 = bus.publisher::<u64>("topic"); // should panic
 }

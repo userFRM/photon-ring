@@ -303,6 +303,36 @@ fn mpmc_2_pub_1_sub(c: &mut Criterion) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// SPMC vs MPMC comparison
+// ---------------------------------------------------------------------------
+
+fn spmc_vs_mpmc(c: &mut Criterion) {
+    // SPMC: single publisher, 1 subscriber — baseline
+    c.bench_function("spmc: 1 pub, 1 sub", |b| {
+        let (mut p, s) = photon_ring::channel::<u64>(4096);
+        let mut sub = s.subscribe();
+        let mut i = 0u64;
+        b.iter(|| {
+            p.publish(i);
+            black_box(sub.try_recv().unwrap());
+            i = i.wrapping_add(1);
+        });
+    });
+
+    // MPMC: single publisher (via MpPublisher), 1 subscriber — measure CAS overhead
+    c.bench_function("mpmc: 1 pub, 1 sub", |b| {
+        let (p, s) = photon_ring::channel_mpmc::<u64>(4096);
+        let mut sub = s.subscribe();
+        let mut i = 0u64;
+        b.iter(|| {
+            p.publish(i);
+            black_box(sub.try_recv().unwrap());
+            i = i.wrapping_add(1);
+        });
+    });
+}
+
 criterion_group!(
     benches,
     publish_single,
@@ -317,5 +347,6 @@ criterion_group!(
     disruptor_roundtrip,
     cross_thread_latency,
     mpmc_2_pub_1_sub,
+    spmc_vs_mpmc,
 );
 criterion_main!(benches);
