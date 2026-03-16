@@ -39,6 +39,14 @@
 
 extern crate alloc;
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "android",
+))]
 pub mod affinity;
 mod bus;
 pub mod channel;
