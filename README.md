@@ -4,12 +4,11 @@
 [![docs.rs](https://docs.rs/photon-ring/badge.svg)](https://docs.rs/photon-ring)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
 [![no_std](https://img.shields.io/badge/no__std-compatible-brightgreen.svg)](https://docs.rs/photon-ring)
+[![CI](https://github.com/userFRM/photon-ring/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/userFRM/photon-ring/actions/workflows/ci.yml)
 
-**Ultra-low-latency SPMC inter-thread messaging using seqlock-stamped ring buffers.**
+Ultra-low-latency `no_std`-compatible ring-buffer messaging for Rust: SPMC broadcast, optional MPMC publishing, named-topic buses, and pipeline topologies built on seqlock-stamped slots.
 
-Photon Ring is a single-producer, multi-consumer (SPMC) pub/sub library for Rust.
-`no_std` compatible (requires `alloc`), zero-allocation hot path, ~96 ns cross-thread
-latency (48 ns one-way), and ~3 ns publish cost.
+## Quick Start
 
 ```rust
 use photon_ring::{channel, Photon};
@@ -17,383 +16,378 @@ use photon_ring::{channel, Photon};
 // Low-level SPMC channel
 let (mut publisher, subscribers) = channel::<u64>(1024);
 let mut sub = subscribers.subscribe();
+
 publisher.publish(42);
 assert_eq!(sub.try_recv(), Ok(42));
 
 // Named-topic bus
 let bus = Photon::<u64>::new(1024);
-let mut pub_ = bus.publisher("prices");
-let mut sub  = bus.subscribe("prices");
-pub_.publish(100);
-assert_eq!(sub.try_recv(), Ok(100));
+let mut prices = bus.publisher("prices");
+let mut prices_sub = bus.subscribe("prices");
+
+prices.publish(101);
+assert_eq!(prices_sub.try_recv(), Ok(101));
 ```
 
-## The Problem
+## Architecture
 
-Inter-thread communication is the dominant cost in concurrent systems. Traditional approaches
-pay for at least one of:
+### SPMC
 
-| Approach | Write cost | Read cost | Allocation |
-|---|---|---|---|
-| `std::sync::mpsc` | Lock + CAS | Lock + CAS | Per-message |
-| `Mutex<VecDeque>` | Lock acquisition | Lock acquisition | Dynamic ring growth |
-| Crossbeam bounded channel | CAS on head | CAS on tail | None (pre-allocated) |
-| LMAX Disruptor | Sequence claim + barrier | Sequence barrier spin | None (pre-allocated) |
-
-The Disruptor eliminated allocation overhead and demonstrated that pre-allocated ring buffers
-with sequence barriers could achieve 8-32 ns latency. But it still relies on sequence barriers
-(shared atomic cursors) that create cache-line contention between producer and consumers.
-
-## The Solution: Seqlock-Stamped Slots
-
-Photon Ring takes a different approach. Instead of sequence barriers, each slot in the ring
-buffer carries its own **seqlock stamp** co-located with the payload:
-
-```
-                        64 bytes (one cache line)
-    ┌─────────────────────────────────────────────────────┐
-    │  stamp: AtomicU64  │  value: T                      │
-    │  (seqlock)         │  (Copy, no Drop)               │
-    └─────────────────────────────────────────────────────┘
-    For T <= 56 bytes, stamp and value share one cache line.
-    Larger T spills to additional lines (still correct, slightly slower).
+```mermaid
+flowchart LR
+    P[Publisher] --> RB[(Ring buffer)]
+    RB --> S1[Subscriber 1]
+    RB --> S2[Subscriber 2]
+    RB --> S3[Subscriber 3]
+    RB --> SN[Subscriber N]
 ```
 
-### Write Protocol (Publisher)
+### MPMC
 
-```
-1. stamp = seq * 2 + 1     (odd = write in progress)
-2. fence(Release)           (stamp visible before data)
-3. memcpy(slot.value, data) (direct write, no allocation)
-4. stamp = seq * 2 + 2     (even = write complete, Release)
-5. cursor = seq             (Release — consumers can proceed)
-```
-
-### Read Protocol (Subscriber)
-
-```
-1. s1 = stamp.load(Acquire)
-2. if odd → spin              (writer active)
-3. if s1 < expected → Empty   (not yet published)
-4. if s1 > expected → Lagged  (slot reused, consult head cursor)
-5. value = memcpy(slot)       (direct read, T: Copy)
-6. fence(Acquire)
-7. s2 = stamp.load()
-8. if s1 == s2 → return       (consistent read)
-9. else → retry               (torn read detected)
+```mermaid
+flowchart LR
+    P1[Publisher 1] --> RB[(Ring buffer)]
+    P2[Publisher 2] --> RB
+    PN[Publisher N] --> RB
+    RB --> S1[Subscriber 1]
+    RB --> S2[Subscriber 2]
+    RB --> SN[Subscriber N]
 ```
 
-### Why This Is Fast
+### Pipeline
 
-1. **No shared mutable state on the read path.** Each subscriber has its own cursor (a local
-   `u64`, not an atomic). Subscribers never write to memory that anyone else reads. Zero
-   cache-line bouncing between consumers.
+```mermaid
+flowchart LR
+    IN[Input publisher] --> R1[(Ring 1)]
+    R1 --> ST1[Stage 1]
+    ST1 --> R2[(Ring 2)]
+    R2 --> ST2[Stage 2]
+    ST2 --> R3[(Ring 3)]
+    R3 --> ST3[Stage 3]
+    ST3 --> OUT[Output subscriber]
+```
 
-2. **Stamp-in-slot co-location.** For payloads up to 56 bytes, the seqlock stamp and payload
-   share the same cache line. A reader loads the stamp and the data in a single cache-line
-   fetch. The Disruptor pattern requires reading a separate sequence barrier (different cache
-   line) before accessing the slot.
+### Slot Layout
 
-3. **No allocation, ever.** The ring is pre-allocated at construction. Publish is a `memcpy`
-   into a pre-existing slot. No `Arc`, no `Box`, no heap allocation on the hot path.
+```mermaid
+flowchart LR
+    subgraph CL["64-byte cache line"]
+        ST["stamp: AtomicU64 (8 B)"]
+        VAL["value: T (up to 56 B stays co-located)"]
+    end
+    VAL -. larger payloads spill .-> EXTRA["additional cache lines"]
+```
 
-4. **`T: Copy` enables torn-read detection without resource leaks.** Because `T` has no
-   destructor, a torn read (partial overwrite during read) never causes double-free or
-   resource leaks. The stamp check detects the inconsistency and the read is retried.
-   See [Soundness](#the-seqlock-memory-model-question) for the full discussion.
+For payloads up to 56 bytes, the stamp and value share the same cache line, so the consumer can validate availability and read the payload from one line.
 
-5. **Single-producer by type system.** `Publisher::publish` takes `&mut self`, enforced by
-   the Rust borrow checker. No CAS, no lock, no sequence claiming on the write side.
+## Public Types
 
-## Benchmark Results
+| Public type | What it does |
+|---|---|
+| `Photon<T>` | Named-topic SPMC bus. Each topic lazily creates its own channel and has exactly one publisher. |
+| `TypedBus` | Heterogeneous topic bus. Each topic may use a different `T: Copy + Send + 'static`; type mismatches panic. |
+| `Publisher<T>` | Single-producer SPMC write handle with `publish`, `publish_batch`, `try_publish`, `published`, and `publish_with`. |
+| `MpPublisher<T>` | Clone-able multi-producer write handle for `channel_mpmc`; multiple threads may publish concurrently. |
+| `Subscribable<T>` | Clone-able subscriber factory returned by channel constructors and buses. |
+| `Subscriber<T>` | Independent consumer with `try_recv`, `recv`, `recv_with`, `latest`, `recv_batch`, `drain`, and counters. |
+| `SubscriberGroup<T, N>` | Grouped consumer that reads one slot once and advances one shared cursor for `N` logical subscribers. |
+| `Drain<'a, T>` | Iterator produced by `Subscriber::drain()` that yields everything currently available. |
+| `TryRecvError` | Non-blocking receive result: `Empty` or `Lagged { skipped }`. |
+| `PublishError<T>` | Backpressure error for bounded SPMC channels: `Full(T)`. |
+| `Shutdown` | Clone-able shutdown signal built on `Arc<AtomicBool>` for graceful loop termination. |
+| `WaitStrategy` | Blocking receive policy: `BusySpin`, `YieldSpin`, `BackoffSpin`, or `Adaptive`. |
+| `affinity::CoreId` | Re-exported core identifier used by the affinity helpers on supported OS targets. |
+| `topology::Pipeline` | Finalized pipeline handle with `shutdown`, `join`, `stage_count`, `is_healthy`, and `panicked_stages`. |
+| `topology::PipelineBuilder` | Entry point for thread-per-stage pipeline construction. |
+| `topology::StageBuilder<T>` | Typed builder used to chain `then(...)` stages or branch with `fan_out(...)`. |
+| `topology::FanOutBuilder<A, B>` | Builder for two-branch fan-out pipelines, with optional `then_a(...)` and `then_b(...)`. |
 
-### Benchmark Machines
+## Benchmarks
 
-| Machine | CPU | Cores | OS | Rust |
+Reported medians for v1.0.0. The hot-path operations come from `benches/throughput.rs`; payload scaling is documented in `docs/payload-scaling.md`.
+
+Machine A: Intel Core i7-10700KF  
+Machine B: Apple M1 Pro
+
+| Operation | Machine A | Machine B | Notes |
+|---|---:|---:|---|
+| Publish only | 2.9 ns | 2.0 ns | `Publisher::publish` |
+| Roundtrip, 1 publisher / 1 subscriber | 2.6 ns | — | Same-thread `publish + try_recv` |
+| Fanout, 10 independent subscribers | 15.9 ns | — | Same-thread read by 10 `Subscriber`s |
+| `SubscriberGroup` aligned fanout, any `N` | 2.6 ns | — | Single seqlock read, effectively flat in the measured range |
+| MPMC, 1 publisher / 1 subscriber | 12.2 ns | — | `MpPublisher` single-thread overhead |
+| Cross-thread roundtrip | 95 ns | 103 ns | Publisher and subscriber on different OS threads |
+| Empty poll | 0.85 ns | — | `Subscriber::try_recv()` on an empty channel |
+| Batch 64 | 156 ns | — | `publish_batch` plus draining 64 messages |
+| Struct roundtrip, 24 B payload | 4.8 ns | — | `Quote { f64, u64, u64 }` |
+| Disruptor publish only | 25.8 ns | 12 ns | `disruptor` v4 comparison |
+| Disruptor cross-thread roundtrip | 132 ns | 174 ns | `disruptor` v4 comparison |
+
+## Comparison
+
+| Capability | Photon Ring | `disruptor-rs` | `crossbeam-channel` | `bus` |
 |---|---|---|---|---|
-| **A** | Intel Core i7-10700KF @ 3.80 GHz | 8C / 16T | Linux 6.8 (Ubuntu) | 1.93.1 |
-| **B** | Apple M1 Pro | 8C | macOS 26.3 | 1.92.0 |
+| Delivery model | Broadcast ring | Sequence-barrier ring | Point-to-point queue | Broadcast channel |
+| Default topology | SPMC | SPMC / MPMC | MPMC | SPMC |
+| Native MPMC publishing | Yes, via `MpPublisher` | Yes | Yes | No |
+| First-class pipeline / fan-out builder | Yes, `topology::Pipeline` | Yes | No | No |
+| Batch APIs | `publish_batch`, `recv_batch`, `drain` | Batch publishing / poller-style processing | Iterator-oriented draining, no broadcast batch API | No first-class batch API |
+| Named-topic bus | `Photon<T>` and `TypedBus` | No | No | No |
+| Backpressure | Optional on SPMC via `channel_bounded` | Yes | Yes | Yes |
+| `no_std` core | Yes | No | No | No |
+| Core affinity helpers | Yes | No | No | No |
+| Hugepage / NUMA helpers | Yes, Linux `hugepages` feature | No | No | No |
+| Payload bound | `T: Copy` | Pre-allocated event type | General queue payloads | `T: Clone` |
+| Reported publish cost in this repo | 2.0-2.9 ns | 12-25.8 ns | — | — |
+| Reported cross-thread roundtrip in this repo | 95-103 ns | 132-174 ns | — | — |
 
-All runs: Criterion, 100 samples, 3-second warmup, `--release` (opt-level 3), no
-core pinning. Numbers are medians. **Your results will vary** — run `cargo bench`
-on your own hardware for authoritative numbers.
-
-### Cross-Thread Latency (the metric that matters)
-
-Both libraries measured with publisher and consumer on separate OS threads, busy-spin
-wait strategy, ring size 4096. This is the apples-to-apples comparison.
-
-| Benchmark | Photon Ring (A) | disruptor 4.0 (A) | Photon Ring (B) | disruptor 4.0 (B) |
-|---|---|---|---|---|
-| Cross-thread roundtrip | **96 ns** | 133 ns | **103 ns** | 174 ns |
-| Publish only (write cost) | **3 ns** | 24 ns | **2 ns** | 12 ns |
-
-Cross-thread latency is dominated by the CPU's cache coherence protocol (MESI/MOESI).
-Both libraries are close to the hardware floor. The publish-only difference reflects
-Photon Ring's simpler write path (one seqlock stamp vs sequence claim + barrier).
-
-### Photon Ring Detailed Benchmarks
-
-| Operation | A | B | Notes |
-|---|---|---|---|
-| `publish` (write only) | 3 ns | 2 ns | Single slot seqlock write |
-| `publish` + `try_recv` (1 sub, same thread) | 2.5 ns | 7 ns | Stamp-only fast path |
-| Fanout: 10 independent subs | 13 ns | 23 ns | ~1.1 ns per additional sub |
-| **Fanout: 10 SubscriberGroup** | **4.3 ns** | — | **~0.2 ns per additional sub** |
-| `try_recv` (empty channel) | < 1 ns | < 1 ns | Single atomic load |
-| Batch publish 64 + drain | 155 ns | 206 ns | 2.4 ns/msg amortized |
-| Struct roundtrip (24B payload) | 4.4 ns | 8 ns | Realistic payload size |
-| Cross-thread latency | 96 ns | 103 ns | Inter-core cache transfer |
-| One-way latency (RDTSC) | 48 ns p50 | — | Single cache line transfer |
-
-### Throughput
-
-The `market_data` example publishes 500,000 messages per topic across 4 independent
-SPMC topics (4 publishers, 4 subscribers):
-
-| Machine | Messages | Time | Throughput |
-|---|---|---|---|
-| **A** | 2,000,000 | 12.5 ms | 160M msg/s |
-| **B** | 2,000,000 | 26.44 ms | 75.6M msg/s |
-
-## Soundness
-
-### Test Suite
-
-- **58 correctness tests** (40 integration + 18 unit) covering basic pub/sub,
-  multi-subscriber fanout, ring overflow with lag detection, `latest()` under
-  contention, batch publish, cross-thread SPMC, bounded backpressure, core
-  affinity, wait strategies, memory control, observability counters, and a
-  1M-message stress test.
-- **10 doc-tests** verifying all code examples compile and run.
-
-### MIRI Verification
-
-Single-threaded tests pass under [Miri](https://github.com/rust-lang/miri) with no
-undefined behavior detected. Multi-threaded tests are excluded because Miri's thread
-scheduling is non-deterministic and the tests contain spin loops.
-
-MIRI verifies the single-threaded unsafe operations (pointer reads/writes, `MaybeUninit`
-handling, `UnsafeCell` access patterns) but **does not verify the concurrent seqlock
-protocol**, which relies on hardware memory ordering guarantees beyond what the abstract
-memory model formalizes.
-
-```bash
-cargo +nightly miri test --test correctness -- --test-threads=1
-```
-
-### The Seqlock Memory Model Question
-
-Seqlocks involve an optimistic read pattern: the reader copies data that may be concurrently
-modified by the writer, then verifies consistency via the stamp. Under the C++20/Rust
-abstract memory model, concurrent non-atomic reads and writes to the same memory location
-constitute a data race, which is undefined behavior — even if the result is discarded
-on mismatch.
-
-**This is a known open problem in language-level memory models.** The pattern is
-universally used in practice:
-
-- **The Linux kernel** uses seqlocks pervasively (`seqlock_t`) for read-heavy data like
-  `jiffies`, namespace counters, and filesystem metadata.
-- **Facebook/Meta's Folly** library implements `folly::SharedMutex` using the same pattern.
-- **The C++ standards committee** (WG21) has acknowledged this gap. Papers like
-  [P1478R7](https://wg21.link/P1478R7) (`std::byte`-based seqlock support) and discussions
-  around `std::start_lifetime_as` aim to formalize seqlock semantics.
-
-**Why `T: Copy` is necessary but not sufficient:**
-
-The `T: Copy` bound ensures no destructor runs on a torn read, preventing resource leaks
-and double-free. However, certain `Copy` types have **validity invariants** — for example,
-`bool` (must be 0 or 1), `NonZero<u32>` (must be non-zero), or reference types. A torn
-read of these types could produce a value that violates the type's invariant, which is
-undefined behavior regardless of whether the value is later discarded.
-
-**Recommended payload types:** Use plain numeric types (`u8`..`u128`, `f32`, `f64`),
-fixed-size arrays of numerics, or `#[repr(C)]` structs composed exclusively of such types.
-These have no validity invariants beyond alignment and can safely tolerate torn reads.
-
-In practice, on all mainstream architectures (x86, ARM, RISC-V), torn reads of
-naturally-aligned types produce a valid-but-meaningless bit pattern that is always
-detected and discarded by the stamp check. No undefined CPU state, trap, or signal
-is produced.
+`crossbeam-channel` is a queue, not a broadcast primitive. If each message should be consumed by one receiver, use `crossbeam-channel`. If each message should be seen by every subscriber, Photon Ring or `bus` are the relevant comparisons.
 
 ## API
 
-### Low-Level Channel
+### SPMC Channel
+
+Use `channel::<T>(capacity)` to create the fast path: one `Publisher<T>` and one `Subscribable<T>`.
+
+- `capacity` must be a power of two and at least 2.
+- `Subscribable::subscribe()` starts at the next message.
+- `Subscribable::subscribe_from_oldest()` starts at the oldest message still in the ring.
+- `Subscriber::try_recv()` returns `Ok(T)`, `Empty`, or `Lagged { skipped }`.
+- `Subscriber::recv()` busy-spins for the lowest wakeup latency.
+- `Subscriber::recv_with(strategy)` uses a configurable `WaitStrategy`.
+- `Subscriber::latest()` skips directly to the newest published value.
+
+### MPMC Channel
+
+Use `channel_mpmc::<T>(capacity)` when you need more than one publishing thread.
+
+- The subscriber side is unchanged: you still get `Subscribable<T>`, `Subscriber<T>`, and `SubscriberGroup<T, N>`.
+- `MpPublisher<T>` is `Clone + Send + Sync`.
+- `MpPublisher::publish(&self, value)` claims a sequence with atomics, writes the slot, then advances the cursor.
+- `MpPublisher::published()` reports claimed sequence count across all clones.
+
+MPMC costs more than SPMC because the write path adds atomic sequence claiming and ordered cursor advancement.
+
+### `SubscriberGroup`
+
+`Subscribable::subscribe_group::<N>()` creates a grouped consumer optimized for same-thread fan-out.
+
+- One seqlock read serves all `N` logical subscribers.
+- The group keeps one shared cursor, so `aligned_count()` is always `N`.
+- `try_recv`, `recv`, `recv_with`, `pending`, `recv_batch`, and observability counters mirror `Subscriber`.
+- The optimization is most useful when many consumers are polled together on the same thread.
+
+### Backpressure
+
+Use `channel_bounded::<T>(capacity, watermark)` for lossless SPMC operation.
+
+- `Publisher::try_publish()` returns `Err(PublishError::Full(value))` instead of overwriting unread data.
+- `Publisher::publish()` and `publish_batch()` spin until there is room.
+- `watermark` reserves headroom before the slowest tracked subscriber.
+- `Subscriber` and `SubscriberGroup` both participate in the slowest-cursor tracking.
+
+The default `channel()` is intentionally lossy: freshness first, no publisher-side scan on the hot path.
+
+### `Photon` Bus
+
+`Photon<T>` is the named-topic layer over SPMC channels.
+
+- `Photon::new(capacity)` sets the default ring size per topic.
+- `publisher(topic)` lazily creates the topic and returns the only publisher for it.
+- `subscribe(topic)` and `subscribable(topic)` create future-only subscribers for that topic.
+- Topics are independent rings, so slow consumers on one topic do not affect another.
+
+### `TypedBus`
+
+`TypedBus` is the heterogeneous variant of `Photon`.
+
+- Each topic gets its own concrete `T`.
+- `publisher::<T>(topic)` and `subscribe::<T>(topic)` enforce type identity per topic.
+- Accessing an existing topic with the wrong type panics with a clear diagnostic.
+
+Use `Photon<T>` when every topic shares one payload type, and `TypedBus` when topics need different message types.
+
+### Pipeline Topology
+
+The `topology` module provides a builder-pattern pipeline on platforms with OS thread support.
 
 ```rust
-use photon_ring::{channel, TryRecvError};
+use photon_ring::topology::Pipeline;
 
-let (mut pub_, subs) = channel::<u64>(1024); // capacity must be power of 2
+let (mut input, stages) = Pipeline::builder()
+    .capacity(64)
+    .input::<u64>();
 
-// Subscribe (future messages only)
-let mut sub = subs.subscribe();
+let (mut output, pipeline) = stages
+    .then(|x| x * 2)
+    .then(|x| x + 1)
+    .build();
 
-// Or subscribe from oldest available message still in the ring
-let mut sub_old = subs.subscribe_from_oldest();
+input.publish(10);
+assert_eq!(output.recv(), 21);
 
-// Publish
-pub_.publish(42);
-pub_.publish_batch(&[1, 2, 3, 4]);
-
-// Receive (non-blocking)
-match sub.try_recv() {
-    Ok(value) => { /* process */ }
-    Err(TryRecvError::Empty) => { /* no data yet */ }
-    Err(TryRecvError::Lagged { skipped }) => { /* fell behind, skipped N messages */ }
-}
-
-// Blocking receive (busy-spins until data is available)
-let value = sub.recv();
-
-// Skip to latest (discard intermediate messages)
-if let Some(latest) = sub.latest() { /* ... */ }
-
-// Query state
-let n = sub.pending();       // messages available (capped at capacity)
-let n = pub_.published();    // total messages published
+pipeline.shutdown();
+pipeline.join();
 ```
 
-**Wait strategies:** `recv()` uses a two-phase spin by default. For control over
-CPU usage vs latency, use `recv_with()`:
+- `Pipeline::builder()` starts construction.
+- `StageBuilder::then(...)` adds a dedicated stage thread.
+- `StageBuilder::fan_out(...)` splits work into two parallel branches.
+- `FanOutBuilder::then_a(...)` and `then_b(...)` extend each branch independently.
+- `Pipeline::is_healthy()` and `panicked_stages()` expose stage health.
 
-```rust
-use photon_ring::WaitStrategy;
+### `WaitStrategy`
 
-// Lowest latency — 100% CPU, use on dedicated pinned cores
-let value = sub.recv_with(WaitStrategy::BusySpin);
+`WaitStrategy` controls blocking receive behavior without introducing OS primitives into the core path.
 
-// Balanced — spin 64 iters, yield 64, then park
-let value = sub.recv_with(WaitStrategy::default());
-```
+- `BusySpin`: minimum wakeup latency, maximum CPU burn.
+- `YieldSpin`: spin-loop hint (`PAUSE` on x86, `WFE` path on aarch64 where implemented).
+- `BackoffSpin`: exponential backoff for longer idle periods.
+- `Adaptive`: default three-phase strategy with configurable spin and yield thresholds.
 
-### Backpressure (bounded channel)
-
-When message loss is unacceptable (e.g., order fill notifications):
-
-```rust
-use photon_ring::{channel_bounded, PublishError};
-
-let (mut pub_, subs) = channel_bounded::<u64>(1024, 0);
-let mut sub = subs.subscribe();
-
-// try_publish returns Full instead of overwriting
-match pub_.try_publish(42u64) {
-    Ok(()) => { /* published */ }
-    Err(PublishError::Full(val)) => { /* ring full, val returned */ }
-}
-```
+Use `Subscriber::recv_with(...)` or `SubscriberGroup::recv_with(...)` when `recv()` is too aggressive for your deployment.
 
 ### Core Affinity
 
-Pin threads to specific CPU cores for deterministic cache coherence latency.
-Available automatically on Linux, macOS, Windows, FreeBSD, NetBSD, and Android
-(via `core_affinity2` dependency).
+On Linux, macOS, Windows, FreeBSD, NetBSD, and Android, the `affinity` module exposes:
 
-```rust,no_run
-use photon_ring::affinity;
+- `available_cores()`
+- `pin_to_core(core_id)`
+- `pin_to_core_id(index)`
+- `core_count()`
 
-let cores = affinity::available_cores();
-// Pin publisher to core 0, subscriber to core 1
-affinity::pin_to_core_id(0);
-```
+Pinning publisher and subscriber threads removes scheduler noise and is the simplest way to stabilize cross-thread latency.
 
-### SubscriberGroup (batched fanout)
+### Hugepages and NUMA
 
-When multiple subscribers are polled on the same thread, `SubscriberGroup` reads the
-ring **once** and advances all cursors together — reducing per-subscriber cost from
-~1.1 ns to ~0.2 ns.
+On Linux with the `hugepages` feature enabled, Photon Ring exposes memory-control helpers:
 
-```rust
-use photon_ring::channel;
+- `Publisher::mlock()` to lock ring pages into RAM.
+- `unsafe Publisher::prefault()` to touch each page before the hot path starts.
+- `mem::mmap_huge_pages(size)` for huge-page-backed allocation.
+- `mem::set_numa_preferred(node)` and `mem::reset_numa_policy()` for NUMA-aware ring placement.
 
-let (mut pub_, subs) = channel::<u64>(1024);
-let mut group = subs.subscribe_group::<10>(); // 10 logical subscribers
+`prefault()` is `unsafe` because it must be called before any publish or subscribe activity.
 
-pub_.publish(42);
-let value = group.try_recv().unwrap(); // one seqlock read, 10 cursor advances
-assert_eq!(value, 42);
-```
+### Observability
 
-### Named-Topic Bus
+Photon Ring keeps lightweight counters on the consumer side.
 
-```rust
-use photon_ring::Photon;
+- `Subscriber::pending()` and `SubscriberGroup::pending()` report currently readable messages, capped at ring capacity.
+- `total_received()`, `total_lagged()`, and `receive_ratio()` are available on both `Subscriber` and `SubscriberGroup`.
+- `Publisher::published()` and `Publisher::sequence()` expose publisher progress.
+- `Pipeline::stage_count()`, `is_healthy()`, and `panicked_stages()` help monitor stage-based topologies.
 
-#[derive(Clone, Copy)]
-struct Quote { price: f64, volume: u32 }
+These are plain counters and atomics, not an external telemetry dependency.
 
-let bus = Photon::<Quote>::new(4096);
+### `recv_batch` and `drain`
 
-// Each topic is an independent SPMC ring.
-// publisher() can only be called once per topic (panics on second call).
-let mut prices_pub = bus.publisher("AAPL");
-let mut prices_sub = bus.subscribe("AAPL");
+Receive-side batching is built into the public API.
 
-// Multiple subscribers per topic
-let mut logger_sub = bus.subscribe("AAPL");
+- `Subscriber::recv_batch(&mut [T]) -> usize`
+- `SubscriberGroup::recv_batch(&mut [T]) -> usize`
+- `Subscriber::drain() -> Drain<'_, T>`
 
-prices_pub.publish(Quote { price: 150.0, volume: 100 });
-```
+Both batch methods transparently retry after lag recovery. `drain()` yields all messages currently available and stops when the ring is empty.
+
+### `Shutdown`
+
+`Shutdown` is the crate's minimal coordination primitive for graceful termination of consumer loops.
+
+- `Shutdown::new()` creates an unset flag.
+- `trigger()` sets the flag for every clone.
+- `is_shutdown()` reads it with acquire semantics.
+
+Use it when you want manual thread orchestration without committing to the `topology` module.
+
+### `publish_with`
+
+Both write handles support in-place construction:
+
+- `Publisher::publish_with(...)`
+- `MpPublisher::publish_with(...)`
+
+The closure receives `&mut MaybeUninit<T>` for the target slot, which lets the compiler elide the write-side copy in favorable cases.
 
 ## Design Constraints
 
-| Constraint | Rationale |
+| Constraint | Why it exists |
 |---|---|
-| `T: Copy` | Enables torn-read detection without resource leaks; see [Soundness](#the-seqlock-memory-model-question) |
-| Power-of-two capacity | Bitmask modulo (`seq & mask`) instead of expensive `%` division |
-| Single producer | Seqlock invariant requires exclusive write access; enforced via `&mut self` |
-| Lossy on overflow | When the ring wraps, oldest messages are silently overwritten; consumers detect via `Lagged` |
-| Busy-spin `recv()` | Lowest latency; use `try_recv()` with your own backoff if CPU usage matters |
+| `T: Copy` | The protocol relies on value copies and retrying torn reads without running destructors. |
+| Prefer plain numerics or `#[repr(C)]` numeric structs | `Copy` alone is not enough for types with validity invariants such as references, `bool`, or `NonZero*`. |
+| Capacity must be a power of two | Slot indexing is `seq & mask`, not `% capacity`. |
+| Capacity must be at least 2 | The ring implementation assumes a real wrap-around buffer. |
+| SPMC is the primary fast path | `Publisher::publish(&mut self, ...)` keeps the single-producer path free of write-side synchronization. |
+| Default channels are lossy | The publisher never blocks and readers detect overruns via `Lagged`. |
+| Lossless mode is SPMC-only | Backpressure currently relies on a single producer scanning subscriber trackers. |
+| 64-bit atomics are required | The cursor and stamp protocol uses `AtomicU64`, which excludes 32-bit ARM microcontrollers. |
+| Slots are 64-byte aligned | Stamp and payload should share a cache line whenever the payload fits. |
+| `topology` requires OS threads | Pipeline stages are implemented as dedicated `std::thread`s and are not available on wasm32 or bare-metal targets. |
+| Hugepage controls are Linux-only | `mlock`, huge pages, and NUMA policy changes use Linux-specific syscalls. |
 
-## Comparison with Existing Work
+## Platform Support
 
-| | Photon Ring | disruptor-rs (v4) | bus (jonhoo) | crossbeam bounded |
-|---|---|---|---|---|
-| **Pattern** | SPMC seqlock ring | SP/MP sequence barriers | SPMC broadcast | MPMC bounded queue |
-| **Cross-thread latency** | 96–103 ns | 133–174 ns | — | — |
-| **Publish cost** | 2–3 ns | 12–24 ns | — | — |
-| **Allocation** | None | None | None | None (bounded) |
-| **Consumer model** | Poll (`try_recv`) | Callback + Poller API | Poll | Poll |
-| **Overflow** | Lossy (Lagged) | Backpressure (blocks) | Backpressure | Backpressure |
-| **Multi-producer** | No | Yes | No | Yes |
-| **`no_std`** | Yes | No | No | No |
-| **Dependencies** | 2 (hashbrown, spin) | 4 | 0 | 3 |
+| Platform | Core ring | `affinity` | `topology` | Hugepages / NUMA | Notes |
+|---|---|---|---|---|---|
+| x86_64 Linux | Yes | Yes | Yes | Yes | Full feature set |
+| x86_64 macOS | Yes | Yes | Yes | No | Core + thread helpers |
+| x86_64 Windows | Yes | Yes | Yes | No | Core + thread helpers |
+| aarch64 Linux | Yes | Yes | Yes | Yes | Includes Linux memory controls |
+| aarch64 macOS (Apple Silicon) | Yes | Yes | Yes | No | M1/M2/M3/M4-class systems |
+| FreeBSD / NetBSD | Yes | Yes | Yes | No | No Linux memory-control module |
+| Android | Yes | Yes | Yes | No | OS-thread targets only |
+| `wasm32-unknown-unknown` | Yes | No | No | No | CI checks the core crate only |
+| 32-bit ARM / Cortex-M | No | No | No | No | `AtomicU64` requirement |
 
-**Note:** Crossbeam bounded channels use backpressure (the sender blocks when the buffer is
-full), which prevents message loss but adds latency under contention. Photon Ring uses lossy
-semantics — the producer never blocks, but slow consumers miss messages.
+The repository CI covers Linux, macOS, Windows, `wasm32-unknown-unknown`, `--no-default-features`, and the Linux `hugepages` feature gate.
+
+## Soundness
+
+Photon Ring uses a slot-local seqlock protocol:
+
+1. The writer stores an odd stamp for sequence `seq`.
+2. The writer copies the payload into the slot.
+3. The writer stores the final even stamp.
+4. The reader loads the stamp, copies the payload, and re-checks the stamp.
+5. If both even stamps match, the read is accepted. Otherwise it is discarded and retried.
+
+This is the same practical shape as kernel-style seqlocks, but it exposes a real language-level caveat: under the Rust and C++ abstract memory models, the optimistic non-atomic payload read/write pair is still a formal data-race gap even if the torn read is detected and thrown away.
+
+What Photon Ring does to constrain that risk:
+
+- It requires `T: Copy`, so torn reads do not run destructors or double-free resources.
+- It keeps stamp and payload co-located in the slot and validates with acquire loads.
+- It documents the recommended payload classes: plain numeric types, fixed-size arrays of numerics, and `#[repr(C)]` structs built from them.
+- It treats types with validity invariants as a bad fit even if they are `Copy`.
+
+Practical guidance:
+
+- Good payloads: `u64`, `f64`, `[u8; 32]`, `#[repr(C)] struct Quote { ... }`.
+- Avoid: references, `bool`, `char`, `NonZero*`, and other `Copy` types whose bit patterns are not all valid.
+
+The repository CI also runs Miri for the single-threaded unsafe surface, but Miri does not prove the concurrent seqlock protocol itself.
 
 ## Running Benchmarks
 
 ```bash
-# Full benchmark suite (includes disruptor comparison)
-cargo bench
+# Full throughput suite, including disruptor comparison and MPMC
+cargo bench --bench throughput
 
-# Market data throughput example
+# Payload-size scaling
+cargo bench --bench payload_scaling
+python3 docs/plot_payload_scaling.py
+
+# One-way x86_64 latency harness
+cargo bench --bench rdtsc_oneway
+
+# End-to-end examples
 cargo run --release --example market_data
-
-# Run the test suite
-cargo test
-
-# MIRI soundness check (requires nightly)
-cargo +nightly miri test --test correctness -- --test-threads=1
+cargo run --release --example pinned_latency
+cargo run --release --example backpressure
+cargo run --release --example pipeline
+cargo run --release --example diamond
 ```
-
-## Platform Support
-
-| Platform | Core ring | Affinity | Hugepages | Notes |
-|---|---|---|---|---|
-| x86_64 Linux | Yes | Yes | Yes | Full support |
-| x86_64 macOS | Yes | Yes | No | |
-| x86_64 Windows | Yes | Yes | No | |
-| aarch64 Linux | Yes | Yes | Yes | |
-| aarch64 macOS (Apple Silicon) | Yes | Yes | No | M1/M2/M3/M4 |
-| wasm32 | Yes | No | No | Core channel only |
-| FreeBSD / NetBSD | Yes | Yes | No | |
-| Android | Yes | Yes | No | |
-| 32-bit ARM (Cortex-M) | No | No | No | Requires AtomicU64 |
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE-APACHE).
+Licensed under the Apache License, Version 2.0. See [LICENSE-APACHE](LICENSE-APACHE).
