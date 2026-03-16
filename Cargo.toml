@@ -25,3 +25,7 @@ name = "market_data"
 [[bench]]
 name = "throughput"
 harness = false
+
+[[bench]]
+name = "rdtsc_oneway"
+harness = false

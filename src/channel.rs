@@ -150,10 +150,32 @@ impl<T: Copy> Subscriber<T> {
     }
 
     /// Spin until the next message is available and return it.
+    ///
+    /// Uses a two-phase spin strategy: bare spin for the first 64 iterations
+    /// (minimum wakeup latency, ~0 ns reaction time), then `PAUSE`-based spin
+    /// (saves power, yields to SMT sibling). On Skylake+, `PAUSE` adds ~140
+    /// cycles of delay per iteration — the bare-spin phase avoids this penalty
+    /// when the message arrives quickly (typical for cross-thread pub/sub).
     #[inline]
     pub fn recv(&mut self) -> T {
         let slot = self.ring.slot(self.cursor);
         let expected = self.cursor * 2 + 2;
+        // Phase 1: bare spin — no PAUSE, minimum wakeup latency
+        for _ in 0..64 {
+            match slot.try_read(self.cursor) {
+                Ok(Some(value)) => {
+                    self.cursor += 1;
+                    return value;
+                }
+                Ok(None) => {}
+                Err(stamp) => {
+                    if stamp >= expected {
+                        return self.recv_slow();
+                    }
+                }
+            }
+        }
+        // Phase 2: PAUSE-based spin — power efficient
         loop {
             match slot.try_read(self.cursor) {
                 Ok(Some(value)) => {
@@ -165,13 +187,17 @@ impl<T: Copy> Subscriber<T> {
                     if stamp < expected {
                         core::hint::spin_loop();
                     } else {
-                        // Lagged — fall back to try_recv to handle cursor update
-                        break;
+                        return self.recv_slow();
                     }
                 }
             }
         }
-        // Slow path for lag recovery
+    }
+
+    /// Slow path for lag recovery in recv().
+    #[cold]
+    #[inline(never)]
+    fn recv_slow(&mut self) -> T {
         loop {
             match self.try_recv() {
                 Ok(val) => return val,
