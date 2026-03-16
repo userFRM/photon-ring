@@ -16,13 +16,13 @@
 //!
 //! ```
 //! // Low-level SPMC channel
-//! let (mut pub_, subs) = photon::channel::<u64>(64);
+//! let (mut pub_, subs) = photon_ring::channel::<u64>(64);
 //! let mut sub = subs.subscribe();
 //! pub_.publish(42);
 //! assert_eq!(sub.try_recv(), Ok(42));
 //!
 //! // Named-topic bus
-//! let bus = photon::Photon::<u64>::new(64);
+//! let bus = photon_ring::Photon::<u64>::new(64);
 //! let mut p = bus.publisher("topic-a");
 //! let mut s = bus.subscribe("topic-a");
 //! p.publish(7);

@@ -178,23 +178,36 @@ impl<T: Copy> Subscriber<T> {
     }
 
     /// Skip to the **latest** published message (discards intermediate ones).
+    ///
+    /// Returns `None` only if nothing has been published yet. Under heavy
+    /// producer load, retries internally if the target slot is mid-write.
     pub fn latest(&mut self) -> Option<T> {
-        let head = self.ring.cursor.0.load(Ordering::Acquire);
-        if head == u64::MAX {
-            return None;
+        loop {
+            let head = self.ring.cursor.0.load(Ordering::Acquire);
+            if head == u64::MAX {
+                return None;
+            }
+            self.cursor = head;
+            match self.read_slot() {
+                Ok(v) => return Some(v),
+                Err(TryRecvError::Empty) => return None,
+                Err(TryRecvError::Lagged { .. }) => {
+                    // Producer lapped us between cursor read and slot read.
+                    // Retry with updated head.
+                }
+            }
         }
-        self.cursor = head;
-        self.read_slot().ok()
     }
 
-    /// How many messages are available to read.
+    /// How many messages are available to read (capped at ring capacity).
     #[inline]
     pub fn pending(&self) -> u64 {
         let head = self.ring.cursor.0.load(Ordering::Acquire);
         if head == u64::MAX || self.cursor > head {
             0
         } else {
-            head - self.cursor + 1
+            let raw = head - self.cursor + 1;
+            raw.min(self.ring.capacity())
         }
     }
 
@@ -250,7 +263,7 @@ impl<T: Copy> Subscriber<T> {
 ///
 /// # Example
 /// ```
-/// let (mut pub_, subs) = photon::channel::<u64>(64);
+/// let (mut pub_, subs) = photon_ring::channel::<u64>(64);
 /// let mut sub = subs.subscribe();
 /// pub_.publish(42);
 /// assert_eq!(sub.try_recv(), Ok(42));

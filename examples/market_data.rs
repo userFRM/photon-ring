@@ -1,4 +1,4 @@
-use photon::Photon;
+use photon_ring::Photon;
 use std::thread;
 use std::time::Instant;
 
@@ -33,8 +33,8 @@ fn main() {
                             break;
                         }
                     }
-                    Err(photon::TryRecvError::Empty) => core::hint::spin_loop(),
-                    Err(photon::TryRecvError::Lagged { skipped }) => {
+                    Err(photon_ring::TryRecvError::Empty) => core::hint::spin_loop(),
+                    Err(photon_ring::TryRecvError::Lagged { skipped }) => {
                         count += skipped;
                     }
                 }

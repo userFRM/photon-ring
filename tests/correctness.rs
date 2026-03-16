@@ -1,4 +1,4 @@
-use photon::{channel, Photon, TryRecvError};
+use photon_ring::{channel, Photon, TryRecvError};
 
 // -------------------------------------------------------------------------
 // Basic publish / receive

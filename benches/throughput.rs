@@ -1,9 +1,13 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 
+// ---------------------------------------------------------------------------
+// Photon benchmarks
+// ---------------------------------------------------------------------------
+
 fn publish_single(c: &mut Criterion) {
-    c.bench_function("publish_single", |b| {
-        let (mut p, _s) = photon::channel::<u64>(4096);
+    c.bench_function("photon: publish only", |b| {
+        let (mut p, _s) = photon_ring::channel::<u64>(4096);
         let mut i = 0u64;
         b.iter(|| {
             p.publish(black_box(i));
@@ -13,8 +17,8 @@ fn publish_single(c: &mut Criterion) {
 }
 
 fn publish_recv_roundtrip(c: &mut Criterion) {
-    c.bench_function("publish+recv roundtrip (1 sub)", |b| {
-        let (mut p, s) = photon::channel::<u64>(4096);
+    c.bench_function("photon: publish+recv 1 sub", |b| {
+        let (mut p, s) = photon_ring::channel::<u64>(4096);
         let mut sub = s.subscribe();
         let mut i = 0u64;
         b.iter(|| {
@@ -28,8 +32,8 @@ fn publish_recv_roundtrip(c: &mut Criterion) {
 
 fn fanout(c: &mut Criterion) {
     for n in [1, 2, 5, 10] {
-        c.bench_function(&format!("fanout_{n}_subs"), |b| {
-            let (mut p, s) = photon::channel::<u64>(4096);
+        c.bench_function(&format!("photon: fanout {n} subs"), |b| {
+            let (mut p, s) = photon_ring::channel::<u64>(4096);
             let mut subs: Vec<_> = (0..n).map(|_| s.subscribe()).collect();
             let mut i = 0u64;
             b.iter(|| {
@@ -44,8 +48,8 @@ fn fanout(c: &mut Criterion) {
 }
 
 fn try_recv_empty(c: &mut Criterion) {
-    c.bench_function("try_recv_empty", |b| {
-        let (_p, s) = photon::channel::<u64>(64);
+    c.bench_function("photon: try_recv (empty)", |b| {
+        let (_p, s) = photon_ring::channel::<u64>(64);
         let mut sub = s.subscribe();
         b.iter(|| {
             let _ = black_box(sub.try_recv());
@@ -54,8 +58,8 @@ fn try_recv_empty(c: &mut Criterion) {
 }
 
 fn latest_skip(c: &mut Criterion) {
-    c.bench_function("latest (skip to newest)", |b| {
-        let (mut p, s) = photon::channel::<u64>(4096);
+    c.bench_function("photon: latest (skip to newest)", |b| {
+        let (mut p, s) = photon_ring::channel::<u64>(4096);
         let mut sub = s.subscribe();
         let mut i = 0u64;
         b.iter(|| {
@@ -69,8 +73,8 @@ fn latest_skip(c: &mut Criterion) {
 }
 
 fn batch_publish_recv(c: &mut Criterion) {
-    c.bench_function("batch_publish 64 + drain", |b| {
-        let (mut p, s) = photon::channel::<u64>(4096);
+    c.bench_function("photon: batch 64 + drain", |b| {
+        let (mut p, s) = photon_ring::channel::<u64>(4096);
         let mut sub = s.subscribe();
         let batch: Vec<u64> = (0..64).collect();
         b.iter(|| {
@@ -91,8 +95,8 @@ struct Quote {
 }
 
 fn struct_roundtrip(c: &mut Criterion) {
-    c.bench_function("struct roundtrip (24B Quote)", |b| {
-        let (mut p, s) = photon::channel::<Quote>(4096);
+    c.bench_function("photon: struct roundtrip (24B)", |b| {
+        let (mut p, s) = photon_ring::channel::<Quote>(4096);
         let mut sub = s.subscribe();
         let mut i = 0u64;
         b.iter(|| {
@@ -107,6 +111,101 @@ fn struct_roundtrip(c: &mut Criterion) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Disruptor comparison benchmarks (apple-to-apple single-threaded roundtrip)
+// ---------------------------------------------------------------------------
+
+fn disruptor_publish_only(c: &mut Criterion) {
+    use disruptor::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    c.bench_function("disruptor: publish only", |b| {
+        let counter = std::sync::Arc::new(AtomicU64::new(0));
+        let c_ref = counter.clone();
+        let mut producer = build_single_producer(4096, || 0u64, BusySpin)
+            .handle_events_with(move |e: &u64, _, _| {
+                c_ref.store(*e, Ordering::Relaxed);
+            })
+            .build();
+
+        let mut i = 0u64;
+        b.iter(|| {
+            producer.publish(|slot| {
+                *slot = black_box(i);
+            });
+            i = i.wrapping_add(1);
+        });
+    });
+}
+
+fn disruptor_roundtrip(c: &mut Criterion) {
+    use disruptor::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    c.bench_function("disruptor: publish+recv 1 consumer", |b| {
+        let counter = std::sync::Arc::new(AtomicU64::new(0));
+        let c2 = counter.clone();
+        let mut producer = build_single_producer(4096, || 0u64, BusySpin)
+            .handle_events_with(move |e: &u64, _, _| {
+                c2.store(*e, Ordering::Release);
+            })
+            .build();
+
+        let mut i = 0u64;
+        b.iter(|| {
+            producer.publish(|slot| {
+                *slot = i;
+            });
+            // Spin until consumer processes the event
+            while counter.load(Ordering::Acquire) != i {
+                core::hint::spin_loop();
+            }
+            black_box(i);
+            i = i.wrapping_add(1);
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Cross-thread latency (Photon)
+// ---------------------------------------------------------------------------
+
+fn cross_thread_latency(c: &mut Criterion) {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    c.bench_function("photon: cross-thread latency", |b| {
+        let (mut p, s) = photon_ring::channel::<u64>(4096);
+        let mut sub = s.subscribe();
+
+        let done = Arc::new(AtomicBool::new(false));
+        let seen = Arc::new(AtomicU64::new(u64::MAX));
+        let done2 = done.clone();
+        let seen2 = seen.clone();
+
+        let reader = std::thread::spawn(move || {
+            while !done2.load(Ordering::Relaxed) {
+                if let Ok(v) = sub.try_recv() {
+                    seen2.store(v, Ordering::Release);
+                }
+                core::hint::spin_loop();
+            }
+        });
+
+        let mut i = 0u64;
+        b.iter(|| {
+            p.publish(i);
+            while seen.load(Ordering::Acquire) != i {
+                core::hint::spin_loop();
+            }
+            i = i.wrapping_add(1);
+        });
+
+        done.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
+    });
+}
+
 criterion_group!(
     benches,
     publish_single,
@@ -116,5 +215,8 @@ criterion_group!(
     latest_skip,
     batch_publish_recv,
     struct_roundtrip,
+    disruptor_publish_only,
+    disruptor_roundtrip,
+    cross_thread_latency,
 );
 criterion_main!(benches);

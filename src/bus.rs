@@ -8,7 +8,7 @@ use std::sync::Mutex;
 /// Each topic is an independent SPMC ring.
 ///
 /// ```
-/// let bus = photon::Photon::<u64>::new(64);
+/// let bus = photon_ring::Photon::<u64>::new(64);
 /// let mut pub_ = bus.publisher("prices");
 /// let mut sub  = bus.subscribe("prices");
 /// pub_.publish(100);

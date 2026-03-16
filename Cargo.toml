@@ -1,5 +1,5 @@
 [package]
-name = "photon"
+name = "photon-ring"
 version = "0.1.0"
 edition = "2021"
 description = "Ultra-low-latency SPMC pub/sub — the seqlock ring that makes Disruptor look slow"
@@ -9,6 +9,7 @@ categories = ["concurrency"]
 
 [dev-dependencies]
 criterion = "0.5"
+disruptor = "4"
 
 [[example]]
 name = "market_data"
