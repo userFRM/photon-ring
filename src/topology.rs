@@ -58,10 +58,10 @@
 //! If a stage closure panics, the panic is captured. Call
 //! [`Pipeline::panicked_stages`] to inspect which stages failed.
 //!
-//! # Requires `std`
+//! # Platform availability
 //!
-//! This module spawns OS threads for each processing stage and is only
-//! available on platforms with `std` thread support.
+//! This module spawns OS threads for each processing stage and is
+//! available on Linux, macOS, Windows, FreeBSD, NetBSD, and Android.
 
 extern crate std;
 

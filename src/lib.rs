@@ -5,9 +5,9 @@
 //!
 //! Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers.
 //!
-//! `no_std` compatible (requires `alloc`). Core channel, bus, and wait
-//! strategies work without the standard library. The [`topology`] module
-//! requires OS threads and is available on supported platforms only.
+//! `no_std` compatible (requires `alloc`). The [`topology`] module uses
+//! OS threads and is available on Linux, macOS, Windows, and other
+//! supported platforms.
 //!
 //! ## Key design
 //!
