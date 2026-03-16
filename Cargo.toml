@@ -1,6 +1,6 @@
 [package]
 name = "photon-ring"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 rust-version = "1.70"
 description = "Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."
@@ -49,6 +49,10 @@ harness = false
 
 [[bench]]
 name = "rdtsc_oneway"
+harness = false
+
+[[bench]]
+name = "payload_scaling"
 harness = false
 
 [package.metadata.docs.rs]

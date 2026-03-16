@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ring::{Padded, SharedRing};
+use crate::slot::Slot;
 use crate::wait::WaitStrategy;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -39,6 +40,13 @@ pub enum PublishError<T> {
 /// by `&mut self`).
 pub struct Publisher<T: Copy> {
     ring: Arc<SharedRing<T>>,
+    /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
+    /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
+    slots_ptr: *const Slot<T>,
+    /// Cached ring mask (`capacity - 1`). Immutable after construction.
+    mask: u64,
+    /// Cached raw pointer to `ring.cursor.0`. Avoids Arc deref on hot path.
+    cursor_ptr: *const AtomicU64,
     seq: u64,
     /// Cached minimum cursor from the last tracker scan. Used as a fast-path
     /// check to avoid scanning on every `try_publish` call.
@@ -53,8 +61,12 @@ impl<T: Copy> Publisher<T> {
     /// `try_publish()` (after backpressure check passes).
     #[inline]
     fn publish_unchecked(&mut self, value: T) {
-        self.ring.slot(self.seq).write(self.seq, value);
-        self.ring.cursor.0.store(self.seq, Ordering::Release);
+        // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
+        // Index is masked to stay within the allocated slot array.
+        let slot = unsafe { &*self.slots_ptr.add((self.seq & self.mask) as usize) };
+        slot.write(self.seq, value);
+        // SAFETY: cursor_ptr points to ring.cursor.0, kept alive by self.ring.
+        unsafe { &*self.cursor_ptr }.store(self.seq, Ordering::Release);
         self.seq += 1;
     }
 
@@ -78,8 +90,10 @@ impl<T: Copy> Publisher<T> {
     /// ```
     #[inline]
     pub fn publish_with(&mut self, f: impl FnOnce(&mut core::mem::MaybeUninit<T>)) {
-        self.ring.slot(self.seq).write_with(self.seq, f);
-        self.ring.cursor.0.store(self.seq, Ordering::Release);
+        // SAFETY: see publish_unchecked.
+        let slot = unsafe { &*self.slots_ptr.add((self.seq & self.mask) as usize) };
+        slot.write_with(self.seq, f);
+        unsafe { &*self.cursor_ptr }.store(self.seq, Ordering::Release);
         self.seq += 1;
     }
 
@@ -171,10 +185,12 @@ impl<T: Copy> Publisher<T> {
         }
         for (i, &v) in values.iter().enumerate() {
             let seq = self.seq + i as u64;
-            self.ring.slot(seq).write(seq, v);
+            // SAFETY: see publish_unchecked.
+            let slot = unsafe { &*self.slots_ptr.add((seq & self.mask) as usize) };
+            slot.write(seq, v);
         }
         let last = self.seq + values.len() as u64 - 1;
-        self.ring.cursor.0.store(last, Ordering::Release);
+        unsafe { &*self.cursor_ptr }.store(last, Ordering::Release);
         self.seq += values.len() as u64;
     }
 
@@ -256,8 +272,12 @@ impl<T: Copy> Subscribable<T> {
         let head = self.ring.cursor.0.load(Ordering::Acquire);
         let start = if head == u64::MAX { 0 } else { head + 1 };
         let tracker = self.ring.register_tracker(start);
+        let slots_ptr = self.ring.slots_ptr();
+        let mask = self.ring.mask;
         Subscriber {
             ring: self.ring.clone(),
+            slots_ptr,
+            mask,
             cursor: start,
             tracker,
             total_lagged: 0,
@@ -280,8 +300,12 @@ impl<T: Copy> Subscribable<T> {
         let head = self.ring.cursor.0.load(Ordering::Acquire);
         let start = if head == u64::MAX { 0 } else { head + 1 };
         let tracker = self.ring.register_tracker(start);
+        let slots_ptr = self.ring.slots_ptr();
+        let mask = self.ring.mask;
         SubscriberGroup {
             ring: self.ring.clone(),
+            slots_ptr,
+            mask,
             cursor: start,
             count: N,
             total_lagged: 0,
@@ -303,8 +327,12 @@ impl<T: Copy> Subscribable<T> {
             0
         };
         let tracker = self.ring.register_tracker(start);
+        let slots_ptr = self.ring.slots_ptr();
+        let mask = self.ring.mask;
         Subscriber {
             ring: self.ring.clone(),
+            slots_ptr,
+            mask,
             cursor: start,
             tracker,
             total_lagged: 0,
@@ -322,6 +350,11 @@ impl<T: Copy> Subscribable<T> {
 /// Each subscriber has its own cursor — no contention between consumers.
 pub struct Subscriber<T: Copy> {
     ring: Arc<SharedRing<T>>,
+    /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
+    /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
+    slots_ptr: *const Slot<T>,
+    /// Cached ring mask (`capacity - 1`). Immutable after construction.
+    mask: u64,
     cursor: u64,
     /// Per-subscriber cursor tracker for backpressure. `None` on regular
     /// (lossy) channels — zero overhead.
@@ -350,7 +383,8 @@ impl<T: Copy> Subscriber<T> {
     /// when the message arrives quickly (typical for cross-thread pub/sub).
     #[inline]
     pub fn recv(&mut self) -> T {
-        let slot = self.ring.slot(self.cursor);
+        // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
+        let slot = unsafe { &*self.slots_ptr.add((self.cursor & self.mask) as usize) };
         let expected = self.cursor * 2 + 2;
         // Phase 1: bare spin — no PAUSE, minimum wakeup latency
         for _ in 0..64 {
@@ -508,7 +542,8 @@ impl<T: Copy> Subscriber<T> {
     /// on the hot path.
     #[inline]
     fn read_slot(&mut self) -> Result<T, TryRecvError> {
-        let slot = self.ring.slot(self.cursor);
+        // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
+        let slot = unsafe { &*self.slots_ptr.add((self.cursor & self.mask) as usize) };
         let expected = self.cursor * 2 + 2;
 
         match slot.try_read(self.cursor) {
@@ -586,6 +621,11 @@ impl<T: Copy> Drop for Subscriber<T> {
 /// ```
 pub struct SubscriberGroup<T: Copy, const N: usize> {
     ring: Arc<SharedRing<T>>,
+    /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
+    /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
+    slots_ptr: *const Slot<T>,
+    /// Cached ring mask (`capacity - 1`). Immutable after construction.
+    mask: u64,
     /// Single cursor shared by all `N` logical subscribers.
     cursor: u64,
     /// Number of logical subscribers in this group (always `N`).
@@ -609,7 +649,8 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
     #[inline]
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
         let cur = self.cursor;
-        let slot = self.ring.slot(cur);
+        // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
+        let slot = unsafe { &*self.slots_ptr.add((cur & self.mask) as usize) };
         let expected = cur * 2 + 2;
 
         match slot.try_read(cur) {
@@ -771,9 +812,15 @@ impl<T: Copy, const N: usize> Drop for SubscriberGroup<T, N> {
 /// ```
 pub fn channel<T: Copy + Send>(capacity: usize) -> (Publisher<T>, Subscribable<T>) {
     let ring = Arc::new(SharedRing::new(capacity));
+    let slots_ptr = ring.slots_ptr();
+    let mask = ring.mask;
+    let cursor_ptr = ring.cursor_ptr();
     (
         Publisher {
             ring: ring.clone(),
+            slots_ptr,
+            mask,
+            cursor_ptr,
             seq: 0,
             cached_slowest: 0,
         },
@@ -821,9 +868,15 @@ pub fn channel_bounded<T: Copy + Send>(
     watermark: usize,
 ) -> (Publisher<T>, Subscribable<T>) {
     let ring = Arc::new(SharedRing::new_bounded(capacity, watermark));
+    let slots_ptr = ring.slots_ptr();
+    let mask = ring.mask;
+    let cursor_ptr = ring.cursor_ptr();
     (
         Publisher {
             ring: ring.clone(),
+            slots_ptr,
+            mask,
+            cursor_ptr,
             seq: 0,
             cached_slowest: 0,
         },
@@ -847,12 +900,26 @@ pub fn channel_bounded<T: Copy + Send>(
 /// Created via [`channel_mpmc()`].
 pub struct MpPublisher<T: Copy> {
     ring: Arc<SharedRing<T>>,
+    /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
+    /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
+    slots_ptr: *const Slot<T>,
+    /// Cached ring mask (`capacity - 1`). Immutable after construction.
+    mask: u64,
+    /// Cached raw pointer to `ring.cursor.0`. Avoids Arc deref on hot path.
+    cursor_ptr: *const AtomicU64,
+    /// Cached raw pointer to `ring.next_seq`. Avoids Arc deref + Option
+    /// unwrap on hot path.
+    next_seq_ptr: *const AtomicU64,
 }
 
 impl<T: Copy> Clone for MpPublisher<T> {
     fn clone(&self) -> Self {
         MpPublisher {
             ring: self.ring.clone(),
+            slots_ptr: self.slots_ptr,
+            mask: self.mask,
+            cursor_ptr: self.cursor_ptr,
+            next_seq_ptr: self.next_seq_ptr,
         }
     }
 }
@@ -867,44 +934,24 @@ impl<T: Copy> MpPublisher<T> {
     ///
     /// Multiple threads may call this concurrently. Each call atomically
     /// claims a sequence number, writes the slot using the seqlock protocol,
-    /// then advances the shared cursor without spinning on predecessors.
+    /// then advances the shared cursor.
     ///
-    /// The cursor is advanced using a single CAS attempt. If it succeeds,
-    /// a short catch-up loop advances the cursor past any later producers
-    /// that already committed but whose CAS failed. If our CAS fails
-    /// (predecessor not done yet), we skip the cursor update entirely —
-    /// the predecessor will catch up when it commits.
+    /// Instead of spinning on the cursor CAS (which serializes all
+    /// producers on one cache line), this implementation waits for the
+    /// predecessor's **slot stamp** to become committed. Stamp checks
+    /// distribute contention across per-slot cache lines, avoiding the
+    /// single-point serialization bottleneck. Once the predecessor is
+    /// confirmed done, a single CAS advances the cursor, followed by a
+    /// catch-up loop to absorb any successors that are also done.
     #[inline]
     pub fn publish(&self, value: T) {
-        let next_seq = self
-            .ring
-            .next_seq
-            .as_ref()
-            .expect("MpPublisher requires an MPMC ring");
-
-        // Step 1: Claim a sequence number.
-        let seq = next_seq.0.fetch_add(1, Ordering::Relaxed);
-
-        // Step 2: Write the slot using the seqlock protocol.
-        self.ring.slot(seq).write(seq, value);
-
-        // Step 3: Non-spinning cursor advance.
-        // Try once to move cursor from our predecessor to us.
-        let expected_cursor = if seq == 0 { u64::MAX } else { seq - 1 };
-        if self
-            .ring
-            .cursor
-            .0
-            .compare_exchange(expected_cursor, seq, Ordering::Release, Ordering::Relaxed)
-            .is_ok()
-        {
-            // We advanced the cursor. Now catch up any later producers
-            // that already committed but whose CAS failed because we
-            // (their predecessor) hadn't finished yet.
-            self.catch_up_cursor(seq, next_seq);
-        }
-        // If CAS failed, our predecessor hasn't committed yet.
-        // When it does, it will advance past us via catch_up_cursor.
+        // SAFETY: next_seq_ptr points to ring.next_seq (MPMC ring), kept alive by self.ring.
+        let next_seq_atomic = unsafe { &*self.next_seq_ptr };
+        let seq = next_seq_atomic.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
+        let slot = unsafe { &*self.slots_ptr.add((seq & self.mask) as usize) };
+        slot.write(seq, value);
+        self.advance_cursor(seq);
     }
 
     /// Publish by writing directly into the slot via a closure.
@@ -924,25 +971,13 @@ impl<T: Copy> MpPublisher<T> {
     /// ```
     #[inline]
     pub fn publish_with(&self, f: impl FnOnce(&mut core::mem::MaybeUninit<T>)) {
-        let next_seq = self
-            .ring
-            .next_seq
-            .as_ref()
-            .expect("MpPublisher requires an MPMC ring");
-
-        let seq = next_seq.0.fetch_add(1, Ordering::Relaxed);
-        self.ring.slot(seq).write_with(seq, f);
-
-        let expected_cursor = if seq == 0 { u64::MAX } else { seq - 1 };
-        if self
-            .ring
-            .cursor
-            .0
-            .compare_exchange(expected_cursor, seq, Ordering::Release, Ordering::Relaxed)
-            .is_ok()
-        {
-            self.catch_up_cursor(seq, next_seq);
-        }
+        // SAFETY: next_seq_ptr points to ring.next_seq (MPMC ring), kept alive by self.ring.
+        let next_seq_atomic = unsafe { &*self.next_seq_ptr };
+        let seq = next_seq_atomic.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
+        let slot = unsafe { &*self.slots_ptr.add((seq & self.mask) as usize) };
+        slot.write_with(seq, f);
+        self.advance_cursor(seq);
     }
 
     /// Number of messages claimed so far (across all clones).
@@ -951,12 +986,8 @@ impl<T: Copy> MpPublisher<T> {
     /// ahead of the cursor if some producers haven't committed yet.
     #[inline]
     pub fn published(&self) -> u64 {
-        self.ring
-            .next_seq
-            .as_ref()
-            .expect("MpPublisher requires an MPMC ring")
-            .0
-            .load(Ordering::Relaxed)
+        // SAFETY: next_seq_ptr points to ring.next_seq, kept alive by self.ring.
+        unsafe { &*self.next_seq_ptr }.load(Ordering::Relaxed)
     }
 
     /// Ring capacity (power of two).
@@ -965,34 +996,84 @@ impl<T: Copy> MpPublisher<T> {
         self.ring.capacity()
     }
 
+    /// Advance the shared cursor after writing seq.
+    ///
+    /// Fast path: single CAS attempt (`cursor: seq-1 -> seq`). In the
+    /// uncontended case this succeeds immediately and has the same cost
+    /// as the original implementation.
+    ///
+    /// Contended path: if the CAS fails (predecessor not done yet), we
+    /// wait on the predecessor's **slot stamp** instead of retrying the
+    /// cursor CAS. Stamp polling distributes contention across per-slot
+    /// cache lines, avoiding the single-point serialization bottleneck
+    /// of the cursor-CAS spin loop.
+    #[inline]
+    fn advance_cursor(&self, seq: u64) {
+        // SAFETY: cursor_ptr points to ring.cursor.0, kept alive by self.ring.
+        let cursor_atomic = unsafe { &*self.cursor_ptr };
+        let expected_cursor = if seq == 0 { u64::MAX } else { seq - 1 };
+
+        // Fast path: single CAS — succeeds immediately when uncontended.
+        if cursor_atomic
+            .compare_exchange(expected_cursor, seq, Ordering::Release, Ordering::Relaxed)
+            .is_ok()
+        {
+            self.catch_up_cursor(seq);
+            return;
+        }
+
+        // Contended path: predecessor hasn't committed yet.
+        // Wait on predecessor's slot stamp (per-slot cache line) instead
+        // of retrying the cursor CAS (shared cache line).
+        if seq > 0 {
+            // SAFETY: slots_ptr is valid for the lifetime of self.ring.
+            let pred_slot = unsafe { &*self.slots_ptr.add(((seq - 1) & self.mask) as usize) };
+            let pred_done = (seq - 1) * 2 + 2;
+            // Check stamp >= pred_done to handle rare ring-wrap case where
+            // a later sequence already overwrote the predecessor's slot.
+            while pred_slot.stamp_load() < pred_done {
+                core::hint::spin_loop();
+            }
+        }
+
+        // Predecessor is done — advance cursor with a single CAS.
+        let _ = cursor_atomic.compare_exchange(
+            expected_cursor,
+            seq,
+            Ordering::Release,
+            Ordering::Relaxed,
+        );
+        // If we won the CAS, absorb any successors that are also done.
+        if cursor_atomic.load(Ordering::Relaxed) == seq {
+            self.catch_up_cursor(seq);
+        }
+    }
+
     /// After successfully advancing the cursor to `seq`, check whether
     /// later producers (seq+1, seq+2, ...) have already committed their
-    /// slots. If so, advance the cursor past them — they skipped their
-    /// own CAS because we (their predecessor) hadn't committed yet.
+    /// slots. If so, advance the cursor past them in one pass.
     ///
-    /// This replaces the per-producer spin loop with a bounded catch-up
-    /// loop that only the "winning" producer executes. In the common
-    /// (uncontended) case the first slot check fails immediately and the
-    /// loop body never runs.
+    /// In the common (uncontended) case the first stamp check fails
+    /// immediately and the loop body never runs.
     #[inline]
-    fn catch_up_cursor(&self, mut seq: u64, next_seq: &crate::ring::Padded<AtomicU64>) {
+    fn catch_up_cursor(&self, mut seq: u64) {
+        // SAFETY: all cached pointers are valid for the lifetime of self.ring.
+        let cursor_atomic = unsafe { &*self.cursor_ptr };
+        let next_seq_atomic = unsafe { &*self.next_seq_ptr };
         loop {
             let next = seq + 1;
             // Don't advance past what has been claimed.
-            if next >= next_seq.0.load(Ordering::Acquire) {
+            if next >= next_seq_atomic.load(Ordering::Acquire) {
                 break;
             }
             // Check if the next slot's stamp shows a completed write.
-            let slot = self.ring.slot(next);
             let done_stamp = next * 2 + 2;
+            let slot = unsafe { &*self.slots_ptr.add((next & self.mask) as usize) };
             if slot.stamp_load() != done_stamp {
                 break;
             }
             // Slot is committed — try to advance cursor.
-            if self
-                .ring
-                .cursor
-                .0
+            if cursor_atomic
                 .compare_exchange(seq, next, Ordering::Release, Ordering::Relaxed)
                 .is_err()
             {
@@ -1026,5 +1107,22 @@ impl<T: Copy> MpPublisher<T> {
 /// ```
 pub fn channel_mpmc<T: Copy + Send>(capacity: usize) -> (MpPublisher<T>, Subscribable<T>) {
     let ring = Arc::new(SharedRing::new_mpmc(capacity));
-    (MpPublisher { ring: ring.clone() }, Subscribable { ring })
+    let slots_ptr = ring.slots_ptr();
+    let mask = ring.mask;
+    let cursor_ptr = ring.cursor_ptr();
+    let next_seq_ptr = &ring
+        .next_seq
+        .as_ref()
+        .expect("MPMC ring must have next_seq")
+        .0 as *const AtomicU64;
+    (
+        MpPublisher {
+            ring: ring.clone(),
+            slots_ptr,
+            mask,
+            cursor_ptr,
+            next_seq_ptr,
+        },
+        Subscribable { ring },
+    )
 }

@@ -98,16 +98,22 @@ impl<T: Copy> SharedRing<T> {
         }
     }
 
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn slot(&self, seq: u64) -> &Slot<T> {
         unsafe { self.slots.get_unchecked((seq & self.mask) as usize) }
     }
 
     /// Raw pointer to the start of the slot array.
-    #[allow(dead_code)] // used only with `hugepages` feature
     #[inline]
     pub(crate) fn slots_ptr(&self) -> *const Slot<T> {
         self.slots.as_ptr()
+    }
+
+    /// Raw pointer to the cursor atomic.
+    #[inline]
+    pub(crate) fn cursor_ptr(&self) -> *const AtomicU64 {
+        &self.cursor.0 as *const AtomicU64
     }
 
     /// Total byte length of the slot array.
