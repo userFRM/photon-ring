@@ -44,9 +44,10 @@ impl<T: Copy + Send + 'static> Photon<T> {
     /// Panics if the publisher for this topic was already taken.
     pub fn publisher(&self, topic: &str) -> Publisher<T> {
         let mut topics = self.topics.lock();
-        let entry = topics
-            .entry(topic.to_string())
-            .or_insert_with(|| Self::make_entry(self.default_capacity));
+        if !topics.contains_key(topic) {
+            topics.insert(topic.to_string(), Self::make_entry(self.default_capacity));
+        }
+        let entry = topics.get_mut(topic).unwrap();
         entry
             .publisher
             .take()
@@ -56,18 +57,20 @@ impl<T: Copy + Send + 'static> Photon<T> {
     /// Subscribe to a topic (future messages only). Creates the topic if needed.
     pub fn subscribe(&self, topic: &str) -> Subscriber<T> {
         let mut topics = self.topics.lock();
-        let entry = topics
-            .entry(topic.to_string())
-            .or_insert_with(|| Self::make_entry(self.default_capacity));
+        if !topics.contains_key(topic) {
+            topics.insert(topic.to_string(), Self::make_entry(self.default_capacity));
+        }
+        let entry = topics.get_mut(topic).unwrap();
         entry.subscribable.subscribe()
     }
 
     /// Get the clone-able subscriber factory for a topic.
     pub fn subscribable(&self, topic: &str) -> Subscribable<T> {
         let mut topics = self.topics.lock();
-        let entry = topics
-            .entry(topic.to_string())
-            .or_insert_with(|| Self::make_entry(self.default_capacity));
+        if !topics.contains_key(topic) {
+            topics.insert(topic.to_string(), Self::make_entry(self.default_capacity));
+        }
+        let entry = topics.get_mut(topic).unwrap();
         entry.subscribable.clone()
     }
 

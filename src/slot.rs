@@ -60,6 +60,20 @@ impl<T: Copy> Slot<T> {
         self.stamp.store(done, Ordering::Release);
     }
 
+    /// Seqlock write via closure — enables in-place construction.
+    #[inline]
+    pub(crate) fn write_with(&self, seq: u64, f: impl FnOnce(&mut MaybeUninit<T>)) {
+        let writing = seq * 2 + 1;
+        let done = seq * 2 + 2;
+
+        self.stamp.store(writing, Ordering::Relaxed);
+        fence(Ordering::Release);
+
+        f(unsafe { &mut *self.value.get() });
+
+        self.stamp.store(done, Ordering::Release);
+    }
+
     /// Seqlock read protocol. Returns `None` on torn read (caller should retry).
     ///
     /// Returns `Err(actual_stamp)` if the slot holds a different sequence.
@@ -69,26 +83,22 @@ impl<T: Copy> Slot<T> {
 
         let s1 = self.stamp.load(Ordering::Acquire);
 
+        // Happy path first — stamp matches expected sequence
+        if s1 == expected {
+            let value = unsafe { ptr::read((*self.value.get()).as_ptr()) };
+            let s2 = self.stamp.load(Ordering::Acquire);
+            if s1 == s2 {
+                return Ok(Some(value));
+            }
+            return Ok(None); // torn read
+        }
+
         // Write in progress — caller should spin
         if s1 & 1 != 0 {
             return Ok(None);
         }
 
         // Wrong sequence (not written yet, or overwritten by a later sequence)
-        if s1 != expected {
-            return Err(s1);
-        }
-
-        // Stamp matches — read the value
-        let value = unsafe { ptr::read((*self.value.get()).as_ptr()) };
-
-        // Verify no torn read
-        let s2 = self.stamp.load(Ordering::Acquire);
-
-        if s1 == s2 {
-            Ok(Some(value))
-        } else {
-            Ok(None) // torn read, retry
-        }
+        Err(s1)
     }
 }

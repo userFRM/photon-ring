@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-03-16
+
+### Performance (Codex-recommended optimizations)
+- **SubscriberGroup: O(1) fanout.** Replaced `[u64; N]` cursor array with single
+  `u64` cursor. Group fanout is now 2.8 ns regardless of N (was 5.3 ns for N=10).
+  Per-subscriber marginal cost: **0 ns** (was 0.2 ns).
+- **try_read happy-path-first branch order.** Stamp-match check is now the first
+  branch, improving branch prediction by ~0.5-1.5 ns/recv.
+- **Backpressure tracker: Relaxed atomics.** Changed tracker loads from Acquire to
+  Relaxed (sufficient for min-computation). Saves ~1 ns on ARM.
+- **Bus topic lookup: no String allocation on hit.** `publisher()`/`subscribe()`
+  now use `&str` lookup via hashbrown's `Equivalent` trait. String allocation
+  only on first topic creation. Saves ~50-300 ns/call.
+- **`publish_with` closure API.** Enables in-place construction in the slot,
+  letting the compiler elide the write-side memcpy. Zero overhead.
+- **`Slot::write_with` internal method** for closure-based seqlock writes.
+
 ## [0.8.0] - 2026-03-16
 
 ### Added

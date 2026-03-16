@@ -142,7 +142,7 @@ impl<T: Copy> SharedRing<T> {
         }
         let mut min = u64::MAX;
         for t in trackers.iter() {
-            let val = t.0.load(core::sync::atomic::Ordering::Acquire);
+            let val = t.0.load(core::sync::atomic::Ordering::Relaxed);
             if val < min {
                 min = val;
             }

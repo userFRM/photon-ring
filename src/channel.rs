@@ -4,7 +4,6 @@
 use crate::ring::{Padded, SharedRing};
 use crate::wait::WaitStrategy;
 use alloc::sync::Arc;
-use core::hint::spin_loop;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
@@ -55,6 +54,31 @@ impl<T: Copy> Publisher<T> {
     #[inline]
     fn publish_unchecked(&mut self, value: T) {
         self.ring.slot(self.seq).write(self.seq, value);
+        self.ring.cursor.0.store(self.seq, Ordering::Release);
+        self.seq += 1;
+    }
+
+    /// Publish by writing directly into the slot via a closure.
+    ///
+    /// The closure receives a `&mut MaybeUninit<T>`, allowing in-place
+    /// construction that can eliminate the write-side `memcpy` when the
+    /// compiler constructs the value directly in slot memory.
+    ///
+    /// This is the lossy (no backpressure) path. For bounded channels,
+    /// prefer [`publish()`](Self::publish) with a pre-built value.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::mem::MaybeUninit;
+    /// let (mut p, s) = photon_ring::channel::<u64>(64);
+    /// let mut sub = s.subscribe();
+    /// p.publish_with(|slot| { slot.write(42u64); });
+    /// assert_eq!(sub.try_recv(), Ok(42));
+    /// ```
+    #[inline]
+    pub fn publish_with(&mut self, f: impl FnOnce(&mut core::mem::MaybeUninit<T>)) {
+        self.ring.slot(self.seq).write_with(self.seq, f);
         self.ring.cursor.0.store(self.seq, Ordering::Release);
         self.seq += 1;
     }
@@ -258,7 +282,8 @@ impl<T: Copy> Subscribable<T> {
         let tracker = self.ring.register_tracker(start);
         SubscriberGroup {
             ring: self.ring.clone(),
-            cursors: [start; N],
+            cursor: start,
+            count: N,
             total_lagged: 0,
             total_received: 0,
             tracker,
@@ -474,7 +499,7 @@ impl<T: Copy> Subscriber<T> {
     #[inline]
     fn update_tracker(&self) {
         if let Some(ref tracker) = self.tracker {
-            tracker.0.store(self.cursor, Ordering::Release);
+            tracker.0.store(self.cursor, Ordering::Relaxed);
         }
     }
 
@@ -549,10 +574,9 @@ impl<T: Copy> Drop for Subscriber<T> {
 
 /// A group of `N` logical subscribers backed by a single ring read.
 ///
-/// When all `N` cursors are at the same position (the common case),
+/// All `N` logical subscribers share one cursor —
 /// [`try_recv`](SubscriberGroup::try_recv) performs **one** seqlock read
-/// and advances all `N` cursors — reducing per-subscriber overhead from
-/// ~1.1 ns to ~0.15 ns.
+/// and a single cursor increment, eliminating the N-element sweep loop.
 ///
 /// ```
 /// let (mut p, subs) = photon_ring::channel::<u64>(64);
@@ -562,7 +586,10 @@ impl<T: Copy> Drop for Subscriber<T> {
 /// ```
 pub struct SubscriberGroup<T: Copy, const N: usize> {
     ring: Arc<SharedRing<T>>,
-    cursors: [u64; N],
+    /// Single cursor shared by all `N` logical subscribers.
+    cursor: u64,
+    /// Number of logical subscribers in this group (always `N`).
+    count: usize,
     /// Cumulative messages skipped due to lag.
     total_lagged: u64,
     /// Cumulative messages successfully received.
@@ -577,24 +604,17 @@ unsafe impl<T: Copy + Send, const N: usize> Send for SubscriberGroup<T, N> {}
 impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
     /// Try to receive the next message for the group.
     ///
-    /// On the fast path (all cursors aligned), this does a single seqlock
-    /// read and sweeps all `N` cursors — the compiler unrolls the cursor
-    /// increment loop for small `N`.
+    /// Performs a single seqlock read and one cursor increment — no
+    /// N-element sweep needed since all logical subscribers share one cursor.
     #[inline]
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
-        // Fast path: all cursors at the same position (common case).
-        let first = self.cursors[0];
-        let slot = self.ring.slot(first);
-        let expected = first * 2 + 2;
+        let cur = self.cursor;
+        let slot = self.ring.slot(cur);
+        let expected = cur * 2 + 2;
 
-        match slot.try_read(first) {
+        match slot.try_read(cur) {
             Ok(Some(value)) => {
-                // Single seqlock read succeeded — advance all aligned cursors.
-                for c in self.cursors.iter_mut() {
-                    if *c == first {
-                        *c = first + 1;
-                    }
-                }
+                self.cursor = cur + 1;
                 self.total_received += 1;
                 self.update_tracker();
                 Ok(value)
@@ -607,18 +627,14 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
                 // Lagged — recompute from head cursor
                 let head = self.ring.cursor.0.load(Ordering::Acquire);
                 let cap = self.ring.capacity();
-                if head == u64::MAX || first > head {
+                if head == u64::MAX || cur > head {
                     return Err(TryRecvError::Empty);
                 }
                 if head >= cap {
                     let oldest = head - cap + 1;
-                    if first < oldest {
-                        let skipped = oldest - first;
-                        for c in self.cursors.iter_mut() {
-                            if *c < oldest {
-                                *c = oldest;
-                            }
-                        }
+                    if cur < oldest {
+                        let skipped = oldest - cur;
+                        self.cursor = oldest;
                         self.total_lagged += skipped;
                         self.update_tracker();
                         return Err(TryRecvError::Lagged { skipped });
@@ -671,20 +687,23 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
         }
     }
 
-    /// How many of the `N` cursors are at the minimum (aligned) position.
+    /// How many of the `N` logical subscribers are aligned.
+    ///
+    /// With the single-cursor design all subscribers are always aligned,
+    /// so this trivially returns `N`.
+    #[inline]
     pub fn aligned_count(&self) -> usize {
-        let min = self.cursors.iter().copied().min().unwrap_or(0);
-        self.cursors.iter().filter(|&&c| c == min).count()
+        self.count
     }
 
-    /// Number of messages available (based on the slowest cursor).
+    /// Number of messages available to read (capped at ring capacity).
+    #[inline]
     pub fn pending(&self) -> u64 {
         let head = self.ring.cursor.0.load(Ordering::Acquire);
-        let min = self.cursors.iter().copied().min().unwrap_or(0);
-        if head == u64::MAX || min > head {
+        if head == u64::MAX || self.cursor > head {
             0
         } else {
-            let raw = head - min + 1;
+            let raw = head - self.cursor + 1;
             raw.min(self.ring.capacity())
         }
     }
@@ -713,13 +732,12 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
         }
     }
 
-    /// Update the backpressure tracker to reflect the minimum cursor position.
+    /// Update the backpressure tracker to reflect the current cursor position.
     /// No-op on regular (lossy) channels.
     #[inline]
     fn update_tracker(&self) {
         if let Some(ref tracker) = self.tracker {
-            let min = self.cursors.iter().copied().min().unwrap_or(0);
-            tracker.0.store(min, Ordering::Release);
+            tracker.0.store(self.cursor, Ordering::Relaxed);
         }
     }
 }
@@ -821,8 +839,10 @@ pub fn channel_bounded<T: Copy + Send>(
 ///
 /// Unlike [`Publisher`], `MpPublisher` is `Clone + Send + Sync` — multiple
 /// threads can publish concurrently. Sequence numbers are claimed atomically
-/// via `fetch_add` on a shared counter, and the cursor is advanced in strict
-/// order using a CAS spin loop (standard Disruptor multi-producer protocol).
+/// via `fetch_add` on a shared counter, and the cursor is advanced with a
+/// single best-effort CAS (no spin loop). Consumers use stamp-based reading,
+/// so the cursor only needs to be eventually consistent for `subscribe()`,
+/// `latest()`, and `pending()`.
 ///
 /// Created via [`channel_mpmc()`].
 pub struct MpPublisher<T: Copy> {
@@ -847,7 +867,13 @@ impl<T: Copy> MpPublisher<T> {
     ///
     /// Multiple threads may call this concurrently. Each call atomically
     /// claims a sequence number, writes the slot using the seqlock protocol,
-    /// then advances the shared cursor in strict order.
+    /// then advances the shared cursor without spinning on predecessors.
+    ///
+    /// The cursor is advanced using a single CAS attempt. If it succeeds,
+    /// a short catch-up loop advances the cursor past any later producers
+    /// that already committed but whose CAS failed. If our CAS fails
+    /// (predecessor not done yet), we skip the cursor update entirely —
+    /// the predecessor will catch up when it commits.
     #[inline]
     pub fn publish(&self, value: T) {
         let next_seq = self
@@ -862,18 +888,60 @@ impl<T: Copy> MpPublisher<T> {
         // Step 2: Write the slot using the seqlock protocol.
         self.ring.slot(seq).write(seq, value);
 
-        // Step 3: Advance the cursor in strict order.
-        // We must wait until all prior sequences have committed.
-        // When seq == 0, the cursor starts at u64::MAX (nothing published).
+        // Step 3: Non-spinning cursor advance.
+        // Try once to move cursor from our predecessor to us.
         let expected_cursor = if seq == 0 { u64::MAX } else { seq - 1 };
-        while self
+        if self
             .ring
             .cursor
             .0
-            .compare_exchange_weak(expected_cursor, seq, Ordering::Release, Ordering::Relaxed)
-            .is_err()
+            .compare_exchange(expected_cursor, seq, Ordering::Release, Ordering::Relaxed)
+            .is_ok()
         {
-            spin_loop();
+            // We advanced the cursor. Now catch up any later producers
+            // that already committed but whose CAS failed because we
+            // (their predecessor) hadn't finished yet.
+            self.catch_up_cursor(seq, next_seq);
+        }
+        // If CAS failed, our predecessor hasn't committed yet.
+        // When it does, it will advance past us via catch_up_cursor.
+    }
+
+    /// Publish by writing directly into the slot via a closure.
+    ///
+    /// Like [`publish`](Self::publish), but the closure receives a
+    /// `&mut MaybeUninit<T>` for in-place construction, potentially
+    /// eliminating a write-side `memcpy`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::mem::MaybeUninit;
+    /// let (p, subs) = photon_ring::channel_mpmc::<u64>(64);
+    /// let mut sub = subs.subscribe();
+    /// p.publish_with(|slot| { slot.write(42u64); });
+    /// assert_eq!(sub.try_recv(), Ok(42));
+    /// ```
+    #[inline]
+    pub fn publish_with(&self, f: impl FnOnce(&mut core::mem::MaybeUninit<T>)) {
+        let next_seq = self
+            .ring
+            .next_seq
+            .as_ref()
+            .expect("MpPublisher requires an MPMC ring");
+
+        let seq = next_seq.0.fetch_add(1, Ordering::Relaxed);
+        self.ring.slot(seq).write_with(seq, f);
+
+        let expected_cursor = if seq == 0 { u64::MAX } else { seq - 1 };
+        if self
+            .ring
+            .cursor
+            .0
+            .compare_exchange(expected_cursor, seq, Ordering::Release, Ordering::Relaxed)
+            .is_ok()
+        {
+            self.catch_up_cursor(seq, next_seq);
         }
     }
 
@@ -895,6 +963,43 @@ impl<T: Copy> MpPublisher<T> {
     #[inline]
     pub fn capacity(&self) -> u64 {
         self.ring.capacity()
+    }
+
+    /// After successfully advancing the cursor to `seq`, check whether
+    /// later producers (seq+1, seq+2, ...) have already committed their
+    /// slots. If so, advance the cursor past them — they skipped their
+    /// own CAS because we (their predecessor) hadn't committed yet.
+    ///
+    /// This replaces the per-producer spin loop with a bounded catch-up
+    /// loop that only the "winning" producer executes. In the common
+    /// (uncontended) case the first slot check fails immediately and the
+    /// loop body never runs.
+    #[inline]
+    fn catch_up_cursor(&self, mut seq: u64, next_seq: &crate::ring::Padded<AtomicU64>) {
+        loop {
+            let next = seq + 1;
+            // Don't advance past what has been claimed.
+            if next >= next_seq.0.load(Ordering::Acquire) {
+                break;
+            }
+            // Check if the next slot's stamp shows a completed write.
+            let slot = self.ring.slot(next);
+            let done_stamp = next * 2 + 2;
+            if slot.stamp_load() != done_stamp {
+                break;
+            }
+            // Slot is committed — try to advance cursor.
+            if self
+                .ring
+                .cursor
+                .0
+                .compare_exchange(seq, next, Ordering::Release, Ordering::Relaxed)
+                .is_err()
+            {
+                break;
+            }
+            seq = next;
+        }
     }
 }
 

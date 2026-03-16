@@ -78,10 +78,13 @@ impl TypedBus {
     /// - Panics if the publisher for this topic was already taken.
     pub fn publisher<T: Copy + Send + 'static>(&self, topic: &str) -> Publisher<T> {
         let mut topics = self.topics.lock();
-        let slot = topics
-            .entry(topic.to_string())
-            .or_insert_with(|| Self::make_slot::<T>(self.default_capacity));
-
+        if !topics.contains_key(topic) {
+            topics.insert(
+                topic.to_string(),
+                Self::make_slot::<T>(self.default_capacity),
+            );
+        }
+        let slot = topics.get_mut(topic).unwrap();
         let entry = Self::downcast_mut::<T>(slot, topic);
         entry
             .publisher
@@ -96,10 +99,13 @@ impl TypedBus {
     /// Panics if the topic already exists with a different type `T`.
     pub fn subscribe<T: Copy + Send + 'static>(&self, topic: &str) -> Subscriber<T> {
         let mut topics = self.topics.lock();
-        let slot = topics
-            .entry(topic.to_string())
-            .or_insert_with(|| Self::make_slot::<T>(self.default_capacity));
-
+        if !topics.contains_key(topic) {
+            topics.insert(
+                topic.to_string(),
+                Self::make_slot::<T>(self.default_capacity),
+            );
+        }
+        let slot = topics.get_mut(topic).unwrap();
         let entry = Self::downcast_mut::<T>(slot, topic);
         entry.subscribable.subscribe()
     }
@@ -111,10 +117,13 @@ impl TypedBus {
     /// Panics if the topic already exists with a different type `T`.
     pub fn subscribable<T: Copy + Send + 'static>(&self, topic: &str) -> Subscribable<T> {
         let mut topics = self.topics.lock();
-        let slot = topics
-            .entry(topic.to_string())
-            .or_insert_with(|| Self::make_slot::<T>(self.default_capacity));
-
+        if !topics.contains_key(topic) {
+            topics.insert(
+                topic.to_string(),
+                Self::make_slot::<T>(self.default_capacity),
+            );
+        }
+        let slot = topics.get_mut(topic).unwrap();
         let entry = Self::downcast_mut::<T>(slot, topic);
         entry.subscribable.clone()
     }
