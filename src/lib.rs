@@ -39,9 +39,6 @@
 
 extern crate alloc;
 
-#[cfg(feature = "std")]
-extern crate std;
-
 #[cfg(feature = "affinity")]
 pub mod affinity;
 mod bus;

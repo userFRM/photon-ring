@@ -1,33 +1,32 @@
 # Roadmap
 
-## v0.4.0 — Production Hardening
+## v0.4.0 — Production Hardening (DONE)
 
-### Core Affinity Helpers
-- [ ] `PinnedPublisher<T>` / `PinnedSubscriber<T>` wrappers that pin the calling
-  thread to a specific CPU core via `core_affinity`
-- [ ] NUMA-aware ring allocation — allocate the ring buffer on the local NUMA node
-  of the publisher core using `libnuma` / `set_mempolicy`
-- [ ] Benchmark with pinning enabled vs disabled on multi-socket Xeon
+### Core Affinity Helpers (DONE)
+- [x] `affinity::pin_to_core()`, `pin_to_core_id()`, `available_cores()`, `core_count()`
+- [x] `no_std` compatible via `core_affinity2` crate (no `std` dependency)
+- [x] Re-exports `CoreId` for direct use
+- [ ] NUMA-aware ring allocation (v0.5.0)
+- [ ] Benchmark with pinning enabled vs disabled on multi-socket Xeon (v0.5.0)
 
-### Backpressure Mode
-- [ ] `channel_bounded()` — publisher blocks when the slowest consumer is within
-  `N` slots of being lapped (configurable watermark)
-- [ ] `PublishError::Full` return type for non-blocking backpressure
-- [ ] Preserves the default lossy `channel()` for market-data use cases
-- [ ] Formal proof that backpressure mode cannot deadlock (single-producer guarantee)
+### Backpressure Mode (DONE)
+- [x] `channel_bounded(capacity, watermark)` — non-lossy bounded channel
+- [x] `Publisher::try_publish()` → `Err(PublishError::Full(value))` when ring is full
+- [x] Per-subscriber cursor tracking with publisher-side min-scan on slow path
+- [x] Zero overhead on default lossy `channel()` (backpressure is `Option::None`)
+- [x] 9 backpressure-specific tests including cross-thread correctness
 
-### Wait Strategies
-- [ ] `WaitStrategy` enum: `BusySpin`, `Yield`, `Park`, `Adaptive`
-- [ ] `BusySpin` — bare spin (current `recv()` phase 1), lowest latency
-- [ ] `Yield` — `thread::yield_now()` between spins, SMT-friendly
-- [ ] `Park` — `thread::park()` / `unpark()`, near-zero CPU when idle
-- [ ] `Adaptive` — spin → yield → park escalation with configurable thresholds
-- [ ] Apply to both `Subscriber::recv()` and `SubscriberGroup::recv()`
+### Wait Strategies (DONE)
+- [x] `WaitStrategy` enum — fully `no_std`, no OS primitives
+- [x] `BusySpin` — bare spin, zero wakeup latency
+- [x] `YieldSpin` — `core::hint::spin_loop()` (PAUSE on x86, YIELD on ARM)
+- [x] `BackoffSpin` — exponential backoff with increasing PAUSE bursts
+- [x] `Adaptive { spin_iters, yield_iters }` — three-phase escalation (default)
+- [x] `recv_with(strategy)` on both `Subscriber` and `SubscriberGroup`
 
 ## v0.5.0 — HFT-Grade Infrastructure
 
 ### Kernel-Bypass Integration
-- [ ] Optional `io_uring` eventfd notification for `Park` wait strategy
 - [ ] Example: DPDK → Photon Ring → strategy threads pipeline
 - [ ] Example: Solarflare ef_vi → Photon Ring fan-out
 
@@ -36,6 +35,7 @@
 - [ ] `mlock` / `mlockall` for ring buffer pages (prevent page faults on hot path)
 - [ ] Cache line padding verification at compile time (`static_assert` on `Slot` size)
 - [ ] Pre-fault all ring pages on construction
+- [ ] NUMA-aware allocation via `set_mempolicy`
 
 ### Observability
 - [ ] Per-subscriber lag counters (total drops, max lag depth)

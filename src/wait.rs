@@ -4,25 +4,24 @@
 //! Wait strategies for blocking receive operations.
 //!
 //! [`WaitStrategy`] controls how a consumer thread waits when no message is
-//! available. Choose based on your latency vs CPU usage requirements:
+//! available. All strategies are `no_std` compatible.
 //!
 //! | Strategy | Latency | CPU usage | Best for |
 //! |---|---|---|---|
 //! | `BusySpin` | Lowest (~0 ns wakeup) | 100% core | HFT, dedicated cores |
-//! | `YieldSpin` | Low (~1-5 us wakeup) | High | Shared cores, SMT |
-//! | `Park` | Medium (~10-50 us wakeup) | Near zero | Background consumers |
+//! | `YieldSpin` | Low (~30 ns on x86) | High | Shared cores, SMT |
+//! | `BackoffSpin` | Medium (exponential) | Decreasing | Background consumers |
 //! | `Adaptive` | Auto-scaling | Varies | General purpose |
 
 /// Strategy for blocking `recv()` and `SubscriberGroup::recv()`.
 ///
-/// Controls how the consumer thread waits when no message is available.
-/// Choose based on your latency vs CPU usage requirements:
+/// All variants are `no_std` compatible — no OS thread primitives required.
 ///
 /// | Strategy | Latency | CPU usage | Best for |
 /// |---|---|---|---|
 /// | `BusySpin` | Lowest (~0 ns wakeup) | 100% core | HFT, dedicated cores |
-/// | `YieldSpin` | Low (~1-5 us wakeup) | High | Shared cores, SMT |
-/// | `Park` | Medium (~10-50 us wakeup) | Near zero | Background consumers |
+/// | `YieldSpin` | Low (~30 ns on x86) | High | Shared cores, SMT |
+/// | `BackoffSpin` | Medium (exponential) | Decreasing | Background consumers |
 /// | `Adaptive` | Auto-scaling | Varies | General purpose |
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitStrategy {
@@ -30,25 +29,22 @@ pub enum WaitStrategy {
     /// but consumes 100% of one CPU core. Use on dedicated, pinned cores.
     BusySpin,
 
-    /// Spin with `thread::yield_now()` between iterations. Yields the
-    /// OS time slice to other threads on the same core. Good for SMT.
-    #[cfg(feature = "std")]
+    /// Spin with `core::hint::spin_loop()` (PAUSE on x86, YIELD on ARM)
+    /// between iterations. Yields the CPU pipeline to the SMT sibling
+    /// and reduces power consumption vs `BusySpin`.
     YieldSpin,
 
-    /// `thread::park()` / `unpark()` based waiting. Near-zero CPU usage
-    /// when idle but higher wakeup latency (~10-50 us depending on OS).
-    #[cfg(feature = "std")]
-    Park,
+    /// Exponential backoff spin. Starts with bare spins, then escalates
+    /// to PAUSE-based spins with increasing delays. Good for consumers
+    /// that may be idle for extended periods without burning a full core.
+    BackoffSpin,
 
-    /// Three-phase escalation: busy-spin for `spin_iters` iterations,
-    /// then yield for `yield_iters`, then park. Balances latency and CPU.
-    ///
-    /// On `no_std` (without the `std` feature), the yield and park phases
-    /// fall back to `core::hint::spin_loop()`.
+    /// Three-phase escalation: bare spin for `spin_iters` iterations,
+    /// then PAUSE-spin for `yield_iters`, then repeated PAUSE bursts.
     Adaptive {
-        /// Number of bare-spin iterations before escalating.
+        /// Number of bare-spin iterations before escalating to PAUSE.
         spin_iters: u32,
-        /// Number of yield iterations before parking (or PAUSE-spinning on `no_std`).
+        /// Number of PAUSE iterations before entering deep backoff.
         yield_iters: u32,
     },
 }
@@ -67,45 +63,36 @@ impl WaitStrategy {
     /// `try_recv` returns `Empty`.
     ///
     /// `iter` is the zero-based iteration count since the last successful
-    /// receive — it drives the phase transitions in `Adaptive`.
+    /// receive — it drives phase transitions in `Adaptive` and `BackoffSpin`.
     #[inline]
     pub(crate) fn wait(&self, iter: u32) {
         match self {
             WaitStrategy::BusySpin => {
-                // No hint, no yield — pure busy loop.
+                // No hint — pure busy loop. Fastest wakeup, highest power.
             }
-            #[cfg(feature = "std")]
             WaitStrategy::YieldSpin => {
-                std::thread::yield_now();
+                // PAUSE on x86, YIELD on ARM, WFE-hint on RISC-V.
+                core::hint::spin_loop();
             }
-            #[cfg(feature = "std")]
-            WaitStrategy::Park => {
-                std::thread::park();
+            WaitStrategy::BackoffSpin => {
+                // Exponential backoff: more PAUSE iterations as we wait longer.
+                let pauses = 1u32.wrapping_shl(iter.min(6)); // 1, 2, 4, 8, 16, 32, 64
+                for _ in 0..pauses {
+                    core::hint::spin_loop();
+                }
             }
             WaitStrategy::Adaptive {
                 spin_iters,
                 yield_iters,
             } => {
                 if iter < *spin_iters {
-                    // Phase 1: bare spin
+                    // Phase 1: bare spin — fastest wakeup.
                 } else if iter < spin_iters + yield_iters {
-                    // Phase 2: yield (or spin_loop on no_std)
-                    #[cfg(feature = "std")]
-                    {
-                        std::thread::yield_now();
-                    }
-                    #[cfg(not(feature = "std"))]
-                    {
-                        core::hint::spin_loop();
-                    }
+                    // Phase 2: PAUSE-spin — yields pipeline.
+                    core::hint::spin_loop();
                 } else {
-                    // Phase 3: park (or spin_loop on no_std)
-                    #[cfg(feature = "std")]
-                    {
-                        std::thread::park();
-                    }
-                    #[cfg(not(feature = "std"))]
-                    {
+                    // Phase 3: deep backoff — multiple PAUSE per iteration.
+                    for _ in 0..8 {
                         core::hint::spin_loop();
                     }
                 }
@@ -133,17 +120,23 @@ mod tests {
     #[test]
     fn busy_spin_returns_immediately() {
         let ws = WaitStrategy::BusySpin;
-        // Should not block — just verify it completes.
         for i in 0..1000 {
             ws.wait(i);
         }
     }
 
-    #[cfg(feature = "std")]
     #[test]
     fn yield_spin_returns() {
         let ws = WaitStrategy::YieldSpin;
         for i in 0..100 {
+            ws.wait(i);
+        }
+    }
+
+    #[test]
+    fn backoff_spin_returns() {
+        let ws = WaitStrategy::BackoffSpin;
+        for i in 0..20 {
             ws.wait(i);
         }
     }
@@ -154,21 +147,8 @@ mod tests {
             spin_iters: 4,
             yield_iters: 4,
         };
-        // Phase 1 (spin): iters 0..4
-        for i in 0..4 {
+        for i in 0..20 {
             ws.wait(i);
-        }
-        // Phase 2 (yield): iters 4..8
-        for i in 4..8 {
-            ws.wait(i);
-        }
-        // Phase 3 (park/spin_loop): iter 8+
-        // On std this would park, but since no one unparks we only test
-        // non-park path here. The park path is tested via recv_with integration.
-        #[cfg(not(feature = "std"))]
-        {
-            ws.wait(8);
-            ws.wait(100);
         }
     }
 

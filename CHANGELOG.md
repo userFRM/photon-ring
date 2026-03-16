@@ -8,21 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.0] - 2026-03-16
 
 ### Added
-- **`WaitStrategy` enum:** Configurable consumer wait behavior —
-  `BusySpin` (zero wakeup latency), `YieldSpin` (SMT-friendly, requires `std`),
-  `Park` (near-zero CPU, requires `std`), `Adaptive { spin_iters, yield_iters }`
-  (three-phase escalation, default). New methods `Subscriber::recv_with(strategy)`
-  and `SubscriberGroup::recv_with(strategy)`.
+- **`WaitStrategy` enum:** Fully `no_std` configurable consumer wait behavior —
+  `BusySpin` (zero wakeup latency), `YieldSpin` (PAUSE/YIELD instruction),
+  `BackoffSpin` (exponential backoff), `Adaptive { spin_iters, yield_iters }`
+  (three-phase escalation, default). No OS primitives required.
+  New methods `Subscriber::recv_with(strategy)` and
+  `SubscriberGroup::recv_with(strategy)`.
 - **`channel_bounded()` with backpressure:** `try_publish()` returns
   `Err(PublishError::Full(value))` when the ring is full instead of overwriting.
   Per-subscriber cursor tracking with publisher-side min-scan on the slow path.
   Zero overhead on the default lossy `channel()`.
-- **Core affinity helpers** (behind `affinity` feature, default on):
-  `affinity::pin_to_core(index)`, `affinity::pin_to_core_id(CoreId)`,
+- **Core affinity helpers** (`affinity` feature, default on, `no_std` via
+  `core_affinity2`): `affinity::pin_to_core()`, `affinity::pin_to_core_id()`,
   `affinity::available_cores()`. Critical for HFT core placement.
-- **`std` feature** (default on): Gates `WaitStrategy::YieldSpin` and `Park`
-  variants. Core channel and bus remain fully `no_std` + `alloc`.
-- **ROADMAP.md:** v0.4.0–v0.6.0 feature plan plus future research directions.
+- **ROADMAP.md** with v0.4.0–v0.6.0 plan and future research directions.
+
+### Removed
+- **`std` feature:** Eliminated entirely. All wait strategies, backpressure,
+  and core affinity are pure `no_std` + `alloc`. Zero `std` dependency.
 
 ## [0.3.0] - 2026-03-16
 
