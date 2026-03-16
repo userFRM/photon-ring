@@ -1,3 +1,6 @@
+// Copyright 2026 Photon Ring Contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use crate::slot::Slot;
 use alloc::boxed::Box;
 use alloc::vec::Vec;

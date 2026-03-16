@@ -1,3 +1,6 @@
+// Copyright 2026 Photon Ring Contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use photon_ring::{channel, Photon, TryRecvError};
 
 // -------------------------------------------------------------------------

@@ -1,3 +1,6 @@
+// Copyright 2026 Photon Ring Contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! # Photon Ring
 //!
 //! Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers.
