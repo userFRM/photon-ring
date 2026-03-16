@@ -11,8 +11,12 @@ incur proportionally higher memcpy cost. This page quantifies the tradeoff.
 
 ## Benchmark Environment
 
-- **CPU:** Intel Core i7-10700KF @ 3.80 GHz (Comet Lake, ring bus L3)
-- **Rust:** 1.93.1, `--release` (opt-level 3)
+| Machine | CPU | OS | Rust |
+|---|---|---|---|
+| **A** | Intel Core i7-10700KF @ 3.80 GHz (Comet Lake, ring bus L3) | Linux 6.8 | 1.93.1 |
+| **B** | Apple M1 Pro | macOS 26.3 | 1.92.0 |
+
+- `--release` (opt-level 3)
 - **Framework:** Criterion, 100 samples, 3-second warmup
 - **Ring size:** 4096 slots
 
@@ -22,18 +26,18 @@ incur proportionally higher memcpy cost. This page quantifies the tradeoff.
 
 ### Same-Thread Roundtrip (L1 hot, pure instruction cost)
 
-| Payload | Latency | Cache lines | Notes |
-|---------|---------|-------------|-------|
-| 8 B | 2.4 ns | 1 | Stamp + value fit in one 64B line |
-| 16 B | 9.8 ns | 1 | |
-| 32 B | 11.8 ns | 1 | |
-| 64 B | 18.8 ns | 2 | Slot = 72B (8B stamp + 64B value), spills to 2 lines |
-| 128 B | 23.3 ns | 3 | |
-| 256 B | 34.4 ns | 5 | |
-| 512 B | 55.9 ns | 9 | |
-| 1 KB | 88.1 ns | 17 | memcpy starts to dominate |
-| 2 KB | 149.6 ns | 33 | |
-| 4 KB | 361.6 ns | 65 | ~5.6 ns per cache line |
+| Payload | Latency (A) | Latency (B) | Cache lines | Notes |
+|---------|-------------|-------------|-------------|-------|
+| 8 B | 2.4 ns | 8.6 ns | 1 | Stamp + value fit in one 64B line |
+| 16 B | 9.8 ns | 11.3 ns | 1 | |
+| 32 B | 11.8 ns | 13.0 ns | 1 | |
+| 64 B | 18.8 ns | 16.4 ns | 2 | Slot = 72B (8B stamp + 64B value), spills to 2 lines |
+| 128 B | 23.3 ns | 25.4 ns | 3 | |
+| 256 B | 34.4 ns | 41.2 ns | 5 | |
+| 512 B | 55.9 ns | 69.6 ns | 9 | |
+| 1 KB | 88.1 ns | 127.9 ns | 17 | memcpy starts to dominate |
+| 2 KB | 149.6 ns | 244.6 ns | 33 | |
+| 4 KB | 361.6 ns | 500.9 ns | 65 | ~5.6 ns per cache line |
 
 ### Cross-Thread Roundtrip (publisher and subscriber on different cores)
 
@@ -43,14 +47,18 @@ Criterion warm-up, iterator structure, and type-generic overhead. The Disruptor 
 is modeled (not measured at each payload size) using the baseline 133 ns from the
 actual `disruptor` crate benchmark plus estimated per-cache-line transfer costs.
 
-| Payload | Photon Ring (measured) | Disruptor (modeled) | Photon Ring advantage |
-|---------|-------------|------------------|-----------------------|
-| 8 B | 117 ns | 133 ns | 12% faster |
-| 64 B | 125 ns | 145 ns | 14% faster |
-| 256 B | 148 ns | 181 ns | 18% faster |
-| 512 B | 163 ns | 229 ns | 29% faster |
-| 1 KB | 191 ns | 325 ns | 41% faster |
-| 4 KB | 342 ns | 901 ns | 62% faster |
+| Payload | Photon Ring A | Photon Ring B | Disruptor (modeled, A) | Photon Ring advantage (A) |
+|---------|---------------|---------------|------------------------|---------------------------|
+| 8 B | 117 ns | 156.7 ns | 133 ns | 12% faster |
+| 16 B | -- | 157.3 ns | -- | -- |
+| 32 B | -- | 157.9 ns | -- | -- |
+| 64 B | 125 ns | 195.8 ns | 145 ns | 14% faster |
+| 128 B | -- | 168.0 ns | -- | -- |
+| 256 B | 148 ns | 156.7 ns | 181 ns | 18% faster |
+| 512 B | 163 ns | 167.6 ns | 229 ns | 29% faster |
+| 1 KB | 191 ns | 226.5 ns | 325 ns | 41% faster |
+| 2 KB | -- | 275.9 ns | -- | -- |
+| 4 KB | 342 ns | 369.7 ns | 901 ns | 62% faster |
 
 ## Key Observations
 

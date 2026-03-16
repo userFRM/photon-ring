@@ -128,22 +128,22 @@ hardware for authoritative numbers.
 
 | Benchmark | Photon Ring (A) | disruptor 4.0 (A) | Photon Ring (B) | disruptor 4.0 (B) |
 |---|---|---|---|---|
-| Publish only | **2.8 ns** | 30.6 ns | **2.0 ns** | 12 ns |
-| Cross-thread roundtrip | **95 ns** | 138 ns | **103 ns** | 174 ns |
+| Publish only | **2.8 ns** | 30.6 ns | **2.4 ns** | 15.3 ns |
+| Cross-thread roundtrip | **95 ns** | 138 ns | **130.1 ns** | 186.1 ns |
 
 ### Detailed Benchmarks
 
 | Operation | A | B | Notes |
 |---|---|---|---|
-| `publish` (write only) | 2.8 ns | 2.0 ns | Single slot seqlock write |
-| `publish` + `try_recv` (1 sub) | 2.7 ns | -- | Stamp-only fast path |
-| Fanout: 10 independent subs | 17 ns | -- | ~1.4 ns per additional sub |
-| **SubscriberGroup (any N)** | **2.6 ns** | -- | **O(1) -- single cursor, single seqlock read** |
-| **MPMC 1 pub, 1 sub** | **12.1 ns** | -- | CAS sequence claiming overhead |
-| `try_recv` (empty) | 0.85 ns | -- | Single atomic load |
-| Batch 64 + drain | 158 ns | -- | 2.5 ns/msg amortized |
-| Struct roundtrip (24B) | 4.8 ns | -- | Realistic payload size |
-| Cross-thread latency | 95 ns | 103 ns | Inter-core cache transfer |
+| `publish` (write only) | 2.8 ns | 2.4 ns | Single slot seqlock write |
+| `publish` + `try_recv` (1 sub) | 2.7 ns | 8.8 ns | Stamp-only fast path |
+| Fanout: 10 independent subs | 17 ns | 27.7 ns | ~1.4 ns per additional sub |
+| **SubscriberGroup (any N)** | **2.6 ns** | **8.8 ns** | **O(1) -- single cursor, single seqlock read** |
+| **MPMC 1 pub, 1 sub** | **12.1 ns** | **10.6 ns** | CAS sequence claiming overhead |
+| `try_recv` (empty) | 0.85 ns | 1.1 ns | Single atomic load |
+| Batch 64 + drain | 158 ns | 282 ns | 2.5 ns/msg amortized |
+| Struct roundtrip (24B) | 4.8 ns | 9.3 ns | Realistic payload size |
+| Cross-thread latency | 95 ns | 130.1 ns | Inter-core cache transfer |
 | One-way latency (RDTSC) | 48 ns p50 | -- | Single cache line transfer |
 
 ### Throughput
@@ -154,7 +154,7 @@ SPMC topics (4 publishers, 4 subscribers):
 | Machine | Throughput |
 |---|---|
 | **A** (Intel i7-10700KF) | 2,000,000 msgs in 5.2 ms = **381M msg/s** |
-| **B** (Apple M1 Pro) | 2,000,000 msgs in 26.4 ms = 75.6M msg/s |
+| **B** (Apple M1 Pro) | 2,000,000 msgs in 40.5 ms = 49.4M msg/s |
 
 ### Payload Scaling
 
