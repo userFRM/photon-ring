@@ -749,14 +749,15 @@ mod tests {
         // Send the panic-inducing value.
         pub_.publish(42);
 
-        // Spin-check until the stage reports panicked.
+        // Wait for the stage to detect the panic. Use a generous timeout
+        // for slow CI environments (e.g., Windows GitHub Actions runners).
         let mut panicked = false;
-        for _ in 0..1_000_000 {
+        for _ in 0..100 {
             if !pipeline.panicked_stages().is_empty() {
                 panicked = true;
                 break;
             }
-            core::hint::spin_loop();
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(panicked, "expected stage to detect panic");
         assert_eq!(pipeline.panicked_stages(), alloc::vec![0]);

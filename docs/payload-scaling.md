@@ -18,7 +18,7 @@ incur proportionally higher memcpy cost. This page quantifies the tradeoff.
 
 ## Results
 
-![Payload Scaling Chart](payload-scaling.png)
+![Payload Scaling Chart](images/payload-scaling.png)
 
 ### Same-Thread Roundtrip (L1 hot, pure instruction cost)
 
@@ -91,5 +91,5 @@ solution on the write side.
 
 ```bash
 cargo bench --bench payload_scaling
-python3 docs/plot_payload_scaling.py
+python3 scripts/plot_payload_scaling.py
 ```

@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`publish_with` closure API:** Enables in-place construction in the slot,
   letting the compiler elide the write-side memcpy.
 - **Payload scaling benchmark** (`benches/payload_scaling.rs`) with matplotlib
-  chart (`docs/payload-scaling.png`) comparing Photon Ring vs Disruptor
+  chart (`docs/images/payload-scaling.png`) comparing Photon Ring vs Disruptor
   across 8B to 4KB payloads.
 - **Raw pointer caching** in Publisher, Subscriber, SubscriberGroup, MpPublisher
   for ~2 ns savings on hot path (eliminates Arc → Box pointer chain).

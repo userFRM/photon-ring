@@ -124,8 +124,8 @@ ax2.grid(True, alpha=0.3)
 ax2.legend(fontsize=10, loc='upper left')
 
 plt.tight_layout()
-plt.savefig('docs/payload-scaling.png', dpi=150, bbox_inches='tight')
-print(f'Saved: docs/payload-scaling.png')
+plt.savefig('docs/images/payload-scaling.png', dpi=150, bbox_inches='tight')
+print(f'Saved: docs/images/payload-scaling.png')
 
 # --- Also generate the data table ---
 print('\n## Payload Scaling Results\n')
