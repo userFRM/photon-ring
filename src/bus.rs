@@ -1,12 +1,11 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-extern crate std;
+use alloc::string::{String, ToString};
 
 use crate::channel::{self, Publisher, Subscribable, Subscriber};
-use std::collections::HashMap;
-use std::string::{String, ToString};
-use std::sync::Mutex;
+use hashbrown::HashMap;
+use spin::Mutex;
 
 /// Named-topic pub/sub bus.
 ///
@@ -44,19 +43,19 @@ impl<T: Copy + Send + 'static> Photon<T> {
     /// # Panics
     /// Panics if the publisher for this topic was already taken.
     pub fn publisher(&self, topic: &str) -> Publisher<T> {
-        let mut topics = self.topics.lock().unwrap();
+        let mut topics = self.topics.lock();
         let entry = topics
             .entry(topic.to_string())
             .or_insert_with(|| Self::make_entry(self.default_capacity));
         entry
             .publisher
             .take()
-            .unwrap_or_else(|| panic!("publisher already taken for topic '{topic}'"))
+            .unwrap_or_else(|| panic!("publisher already taken for topic '{}'", topic))
     }
 
     /// Subscribe to a topic (future messages only). Creates the topic if needed.
     pub fn subscribe(&self, topic: &str) -> Subscriber<T> {
-        let mut topics = self.topics.lock().unwrap();
+        let mut topics = self.topics.lock();
         let entry = topics
             .entry(topic.to_string())
             .or_insert_with(|| Self::make_entry(self.default_capacity));
@@ -65,7 +64,7 @@ impl<T: Copy + Send + 'static> Photon<T> {
 
     /// Get the clone-able subscriber factory for a topic.
     pub fn subscribable(&self, topic: &str) -> Subscribable<T> {
-        let mut topics = self.topics.lock().unwrap();
+        let mut topics = self.topics.lock();
         let entry = topics
             .entry(topic.to_string())
             .or_insert_with(|| Self::make_entry(self.default_capacity));

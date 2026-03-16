@@ -48,7 +48,7 @@ buffer carries its own **seqlock stamp** co-located with the payload:
                         64 bytes (one cache line)
     ┌─────────────────────────────────────────────────────┐
     │  stamp: AtomicU64  │  value: T                      │
-    │  (seqlock)         │  (Copy, no Drop)                │
+    │  (seqlock)         │  (Copy, no Drop)               │
     └─────────────────────────────────────────────────────┘
     For T <= 56 bytes, stamp and value share one cache line.
     Larger T spills to additional lines (still correct, slightly slower).
