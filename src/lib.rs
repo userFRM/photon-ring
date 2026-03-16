@@ -45,4 +45,4 @@ pub(crate) mod ring;
 pub(crate) mod slot;
 
 pub use bus::Photon;
-pub use channel::{channel, Publisher, Subscribable, Subscriber, TryRecvError};
+pub use channel::{channel, Publisher, Subscribable, Subscriber, SubscriberGroup, TryRecvError};

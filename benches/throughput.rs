@@ -50,6 +50,54 @@ fn fanout(c: &mut Criterion) {
     }
 }
 
+fn fanout_group(c: &mut Criterion) {
+    for n in [1, 2, 5, 10] {
+        c.bench_function(&format!("photon: group fanout {n} subs"), |b| match n {
+            1 => {
+                let (mut p, s) = photon_ring::channel::<u64>(4096);
+                let mut g = s.subscribe_group::<1>();
+                let mut i = 0u64;
+                b.iter(|| {
+                    p.publish(i);
+                    black_box(g.try_recv().unwrap());
+                    i = i.wrapping_add(1);
+                });
+            }
+            2 => {
+                let (mut p, s) = photon_ring::channel::<u64>(4096);
+                let mut g = s.subscribe_group::<2>();
+                let mut i = 0u64;
+                b.iter(|| {
+                    p.publish(i);
+                    black_box(g.try_recv().unwrap());
+                    i = i.wrapping_add(1);
+                });
+            }
+            5 => {
+                let (mut p, s) = photon_ring::channel::<u64>(4096);
+                let mut g = s.subscribe_group::<5>();
+                let mut i = 0u64;
+                b.iter(|| {
+                    p.publish(i);
+                    black_box(g.try_recv().unwrap());
+                    i = i.wrapping_add(1);
+                });
+            }
+            10 => {
+                let (mut p, s) = photon_ring::channel::<u64>(4096);
+                let mut g = s.subscribe_group::<10>();
+                let mut i = 0u64;
+                b.iter(|| {
+                    p.publish(i);
+                    black_box(g.try_recv().unwrap());
+                    i = i.wrapping_add(1);
+                });
+            }
+            _ => unreachable!(),
+        });
+    }
+}
+
 fn try_recv_empty(c: &mut Criterion) {
     c.bench_function("photon: try_recv (empty)", |b| {
         let (_p, s) = photon_ring::channel::<u64>(64);
@@ -214,6 +262,7 @@ criterion_group!(
     publish_single,
     publish_recv_roundtrip,
     fanout,
+    fanout_group,
     try_recv_empty,
     latest_skip,
     batch_publish_recv,
