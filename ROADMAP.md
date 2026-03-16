@@ -46,17 +46,21 @@
 - [ ] Example: DPDK → Photon Ring pipeline (v0.6.0)
 - [ ] Example: Solarflare ef_vi → Photon Ring fan-out (v0.6.0)
 
-## v0.6.0 — Advanced Patterns
+## v0.7.0 — Advanced Patterns (DONE)
 
-### Multi-Producer Support
-- [ ] `channel_mpmc()` — CAS-based sequence claiming for multi-producer
-- [ ] Benchmark MPMC vs SPMC to quantify the CAS overhead
-- [ ] Document when SPMC (current) vs MPMC is appropriate
+### Multi-Producer Support (DONE)
+- [x] `channel_mpmc()` — CAS-based sequence claiming for multi-producer
+- [x] `MpPublisher<T>` — Clone + Send + Sync, `&self` publish
+- [x] Ordered cursor advancement (consumers see messages in sequence)
+- [ ] Benchmark MPMC vs SPMC to quantify the CAS overhead (future)
 
-### Consumer Topologies
-- [ ] Pipeline: `A → B → C` (consumer B publishes to a second ring)
-- [ ] Diamond: `A → {B, C} → D` (fan-out then fan-in)
-- [ ] Provide topology builder or document the pattern with examples
+### Consumer Topologies (DONE)
+- [x] Pipeline: `A → B → C` — `examples/pipeline.rs`
+- [x] Diamond: `A → {B, C} → D` — `examples/diamond.rs`
+
+### NUMA-Aware Allocation (DONE)
+- [x] `mem::set_numa_preferred(node)` — set memory policy for ring allocation
+- [x] `mem::reset_numa_policy()` — reset to system default
 
 ### Typed Topic Bus
 - [ ] `Photon::topic::<T>(name)` — heterogeneous topics with type-erased storage

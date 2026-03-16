@@ -1,6 +1,6 @@
 [package]
 name = "photon-ring"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.70"
 description = "Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."
@@ -36,6 +36,12 @@ name = "pinned_latency"
 
 [[example]]
 name = "backpressure"
+
+[[example]]
+name = "pipeline"
+
+[[example]]
+name = "diamond"
 
 [[bench]]
 name = "throughput"

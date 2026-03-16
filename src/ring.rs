@@ -34,6 +34,9 @@ pub(crate) struct SharedRing<T> {
     pub(crate) cursor: Padded<AtomicU64>,
     /// Present only for bounded (backpressure-capable) channels.
     pub(crate) backpressure: Option<BackpressureState>,
+    /// Shared sequence counter for multi-producer channels.
+    /// `None` for SPMC channels, `Some` for MPMC channels.
+    pub(crate) next_seq: Option<Padded<AtomicU64>>,
 }
 
 impl<T: Copy> SharedRing<T> {
@@ -51,6 +54,7 @@ impl<T: Copy> SharedRing<T> {
             mask: (capacity - 1) as u64,
             cursor: Padded(AtomicU64::new(u64::MAX)),
             backpressure: None,
+            next_seq: None,
         }
     }
 
@@ -72,6 +76,25 @@ impl<T: Copy> SharedRing<T> {
                 watermark: watermark as u64,
                 trackers: Mutex::new(Vec::new()),
             }),
+            next_seq: None,
+        }
+    }
+
+    pub(crate) fn new_mpmc(capacity: usize) -> Self {
+        assert!(
+            capacity.is_power_of_two(),
+            "capacity must be a power of two"
+        );
+        assert!(capacity >= 2, "capacity must be at least 2");
+
+        let slots: Vec<Slot<T>> = (0..capacity).map(|_| Slot::new()).collect();
+
+        SharedRing {
+            slots: slots.into_boxed_slice(),
+            mask: (capacity - 1) as u64,
+            cursor: Padded(AtomicU64::new(u64::MAX)),
+            backpressure: None,
+            next_seq: Some(Padded(AtomicU64::new(0))),
         }
     }
 

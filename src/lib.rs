@@ -58,7 +58,7 @@ pub mod wait;
 
 pub use bus::Photon;
 pub use channel::{
-    channel, channel_bounded, PublishError, Publisher, Subscribable, Subscriber, SubscriberGroup,
-    TryRecvError,
+    channel, channel_bounded, channel_mpmc, MpPublisher, PublishError, Publisher, Subscribable,
+    Subscriber, SubscriberGroup, TryRecvError,
 };
 pub use wait::WaitStrategy;

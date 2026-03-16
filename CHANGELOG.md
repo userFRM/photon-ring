@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-03-16
+
+### Added
+- **Multi-producer support:** `channel_mpmc()` returns `MpPublisher<T>` (Clone + Send +
+  Sync) that uses CAS-based sequence claiming. Multiple threads can publish concurrently.
+  Ordered cursor advancement ensures consumers see messages in sequence order.
+  `MpPublisher::publish()` takes `&self` (not `&mut self`).
+- **Pipeline example** (`examples/pipeline.rs`): Three-stage processing chain
+  (raw ticks → enrichment → signal generation) demonstrating how to chain
+  multiple Photon Ring channels.
+- **Diamond example** (`examples/diamond.rs`): Fan-out to two filter stages,
+  fan-in to an aggregator, demonstrating parallel processing topologies.
+- **NUMA-aware allocation** (`hugepages` feature, Linux): `mem::set_numa_preferred(node)`
+  and `mem::reset_numa_policy()` via `set_mempolicy` syscall. Call before `channel()`
+  to place the ring on the publisher's NUMA node.
+- License changed to Apache-2.0 only.
+
 ## [0.6.0] - 2026-03-16
 
 ### Fixed (Codex-reported critical issues)

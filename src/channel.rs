@@ -4,6 +4,7 @@
 use crate::ring::{Padded, SharedRing};
 use crate::wait::WaitStrategy;
 use alloc::sync::Arc;
+use core::hint::spin_loop;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
@@ -810,4 +811,115 @@ pub fn channel_bounded<T: Copy + Send>(
         },
         Subscribable { ring },
     )
+}
+
+// ---------------------------------------------------------------------------
+// MpPublisher (multi-producer write side)
+// ---------------------------------------------------------------------------
+
+/// The write side of a Photon MPMC channel.
+///
+/// Unlike [`Publisher`], `MpPublisher` is `Clone + Send + Sync` — multiple
+/// threads can publish concurrently. Sequence numbers are claimed atomically
+/// via `fetch_add` on a shared counter, and the cursor is advanced in strict
+/// order using a CAS spin loop (standard Disruptor multi-producer protocol).
+///
+/// Created via [`channel_mpmc()`].
+pub struct MpPublisher<T: Copy> {
+    ring: Arc<SharedRing<T>>,
+}
+
+impl<T: Copy> Clone for MpPublisher<T> {
+    fn clone(&self) -> Self {
+        MpPublisher {
+            ring: self.ring.clone(),
+        }
+    }
+}
+
+// Safety: MpPublisher uses atomic CAS for all shared state.
+// No mutable fields — all coordination is via atomics on SharedRing.
+unsafe impl<T: Copy + Send> Send for MpPublisher<T> {}
+unsafe impl<T: Copy + Send> Sync for MpPublisher<T> {}
+
+impl<T: Copy> MpPublisher<T> {
+    /// Publish a single value. Zero-allocation, O(1) amortised.
+    ///
+    /// Multiple threads may call this concurrently. Each call atomically
+    /// claims a sequence number, writes the slot using the seqlock protocol,
+    /// then advances the shared cursor in strict order.
+    #[inline]
+    pub fn publish(&self, value: T) {
+        let next_seq = self
+            .ring
+            .next_seq
+            .as_ref()
+            .expect("MpPublisher requires an MPMC ring");
+
+        // Step 1: Claim a sequence number.
+        let seq = next_seq.0.fetch_add(1, Ordering::Relaxed);
+
+        // Step 2: Write the slot using the seqlock protocol.
+        self.ring.slot(seq).write(seq, value);
+
+        // Step 3: Advance the cursor in strict order.
+        // We must wait until all prior sequences have committed.
+        // When seq == 0, the cursor starts at u64::MAX (nothing published).
+        let expected_cursor = if seq == 0 { u64::MAX } else { seq - 1 };
+        while self
+            .ring
+            .cursor
+            .0
+            .compare_exchange_weak(expected_cursor, seq, Ordering::Release, Ordering::Relaxed)
+            .is_err()
+        {
+            spin_loop();
+        }
+    }
+
+    /// Number of messages claimed so far (across all clones).
+    ///
+    /// This reads the shared atomic counter — the value may be slightly
+    /// ahead of the cursor if some producers haven't committed yet.
+    #[inline]
+    pub fn published(&self) -> u64 {
+        self.ring
+            .next_seq
+            .as_ref()
+            .expect("MpPublisher requires an MPMC ring")
+            .0
+            .load(Ordering::Relaxed)
+    }
+
+    /// Ring capacity (power of two).
+    #[inline]
+    pub fn capacity(&self) -> u64 {
+        self.ring.capacity()
+    }
+}
+
+/// Create a Photon MPMC (multi-producer, multi-consumer) channel.
+///
+/// `capacity` must be a power of two (>= 2). Returns a clone-able
+/// [`MpPublisher`] and the same [`Subscribable`] factory used by SPMC
+/// channels.
+///
+/// Multiple threads can clone the publisher and publish concurrently.
+/// Subscribers work identically to the SPMC case.
+///
+/// # Example
+/// ```
+/// let (pub_, subs) = photon_ring::channel_mpmc::<u64>(64);
+/// let mut sub = subs.subscribe();
+///
+/// let pub2 = pub_.clone();
+/// pub_.publish(1);
+/// pub2.publish(2);
+///
+/// assert_eq!(sub.try_recv(), Ok(1));
+/// assert_eq!(sub.try_recv(), Ok(2));
+/// ```
+pub fn channel_mpmc<T: Copy + Send>(capacity: usize) -> (MpPublisher<T>, Subscribable<T>) {
+    let ring = Arc::new(SharedRing::new_mpmc(capacity));
+    (MpPublisher { ring: ring.clone() }, Subscribable { ring })
 }

@@ -61,6 +61,61 @@ pub unsafe fn prefault_pages(ptr: *mut u8, size: usize) {
     }
 }
 
+/// Set memory policy to prefer allocations on a specific NUMA node.
+/// Call before creating channels to place the ring on the publisher's node.
+///
+/// Uses `set_mempolicy(MPOL_PREFERRED, ...)` so that subsequent heap
+/// allocations (including the ring buffer `Vec<Slot<T>>`) are placed on
+/// the requested node when possible, falling back to other nodes if
+/// memory is exhausted.
+///
+/// Returns `true` on success, `false` if NUMA is not available or the
+/// node ID is invalid.
+///
+/// # Example
+///
+/// ```no_run
+/// use photon_ring::mem;
+///
+/// // Pin to core 0, set NUMA preference for that core's node
+/// photon_ring::affinity::pin_to_core_id(0);
+/// mem::set_numa_preferred(0); // NUMA node 0
+/// let (pub_, subs) = photon_ring::channel::<u64>(4096);
+/// // Ring is now allocated on NUMA node 0
+/// mem::reset_numa_policy();
+/// ```
+pub fn set_numa_preferred(node: usize) -> bool {
+    // MPOL_PREFERRED = 1: prefer the specified node, fall back to others.
+    let nodemask: libc::c_ulong = 1u64.wrapping_shl(node as u32) as libc::c_ulong;
+    let maxnode = core::mem::size_of::<libc::c_ulong>() * 8;
+    unsafe {
+        libc::syscall(
+            libc::SYS_set_mempolicy,
+            1i32, // MPOL_PREFERRED
+            &nodemask as *const libc::c_ulong,
+            maxnode as libc::c_ulong,
+        ) == 0
+    }
+}
+
+/// Reset the memory allocation policy to the system default.
+///
+/// Call this after channel creation to avoid affecting unrelated
+/// allocations on the same thread.
+///
+/// Returns `true` on success.
+pub fn reset_numa_policy() -> bool {
+    // MPOL_DEFAULT = 0: revert to the system-wide default policy.
+    unsafe {
+        libc::syscall(
+            libc::SYS_set_mempolicy,
+            0i32, // MPOL_DEFAULT
+            core::ptr::null::<libc::c_ulong>(),
+            0 as libc::c_ulong,
+        ) == 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +217,25 @@ mod tests {
         unsafe {
             libc::munmap(ptr as *mut libc::c_void, size);
         }
+    }
+
+    #[test]
+    fn test_set_numa_preferred() {
+        // On non-NUMA systems the syscall may return false — that is fine.
+        // On NUMA systems node 0 always exists. Either way, this must not
+        // panic or crash.
+        let result = set_numa_preferred(0);
+        // Accept both outcomes: true (NUMA available) or false (not available).
+        let _ = result;
+
+        // Always clean up to avoid affecting other tests on this thread.
+        reset_numa_policy();
+    }
+
+    #[test]
+    fn test_reset_numa_policy() {
+        // Resetting to default should always succeed, even on non-NUMA
+        // systems, because MPOL_DEFAULT with a null nodemask is valid.
+        assert!(reset_numa_policy());
     }
 }

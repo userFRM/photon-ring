@@ -257,6 +257,52 @@ fn cross_thread_latency(c: &mut Criterion) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// MPMC benchmarks
+// ---------------------------------------------------------------------------
+
+fn mpmc_2_pub_1_sub(c: &mut Criterion) {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    c.bench_function("photon: mpmc 2pub 1sub latency", |b| {
+        let (pub_, s) = photon_ring::channel_mpmc::<u64>(4096);
+        let pub2 = pub_.clone();
+        let mut sub = s.subscribe();
+
+        let done = Arc::new(AtomicBool::new(false));
+        let seen = Arc::new(AtomicU64::new(u64::MAX));
+        let done2 = done.clone();
+        let seen2 = seen.clone();
+
+        let reader = std::thread::spawn(move || {
+            while !done2.load(Ordering::Relaxed) {
+                if let Ok(v) = sub.try_recv() {
+                    seen2.store(v, Ordering::Release);
+                }
+                core::hint::spin_loop();
+            }
+        });
+
+        let mut i = 0u64;
+        b.iter(|| {
+            // Alternate between two publishers.
+            if i & 1 == 0 {
+                pub_.publish(i);
+            } else {
+                pub2.publish(i);
+            }
+            while seen.load(Ordering::Acquire) != i {
+                core::hint::spin_loop();
+            }
+            i = i.wrapping_add(1);
+        });
+
+        done.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
+    });
+}
+
 criterion_group!(
     benches,
     publish_single,
@@ -270,5 +316,6 @@ criterion_group!(
     disruptor_publish_only,
     disruptor_roundtrip,
     cross_thread_latency,
+    mpmc_2_pub_1_sub,
 );
 criterion_main!(benches);

@@ -1,7 +1,7 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use photon_ring::{channel, channel_bounded, Photon, PublishError, TryRecvError};
+use photon_ring::{channel, channel_bounded, channel_mpmc, Photon, PublishError, TryRecvError};
 
 // -------------------------------------------------------------------------
 // Basic publish / receive
@@ -1027,4 +1027,312 @@ fn subscriber_group_bounded_cross_thread() {
 fn subscribe_group_zero_panics() {
     let (_p, s) = channel::<u64>(4);
     let _group = s.subscribe_group::<0>();
+}
+
+// -------------------------------------------------------------------------
+// MPMC (multi-producer, multi-consumer) channel
+// -------------------------------------------------------------------------
+
+#[test]
+fn mpmc_basic() {
+    let (pub1, subs) = channel_mpmc::<u64>(64);
+    let pub2 = pub1.clone();
+    let mut sub = subs.subscribe();
+
+    pub1.publish(1);
+    pub2.publish(2);
+
+    assert_eq!(sub.try_recv(), Ok(1));
+    assert_eq!(sub.try_recv(), Ok(2));
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[test]
+fn mpmc_two_publishers_one_subscriber() {
+    let (pub1, subs) = channel_mpmc::<u64>(4096);
+    let pub2 = pub1.clone();
+    let mut sub = subs.subscribe();
+    let n = 10_000u64;
+
+    let writer1 = std::thread::spawn(move || {
+        for i in 0..n {
+            pub1.publish(i * 2); // even numbers
+        }
+    });
+
+    let writer2 = std::thread::spawn(move || {
+        for i in 0..n {
+            pub2.publish(i * 2 + 1); // odd numbers
+        }
+    });
+
+    writer1.join().unwrap();
+    writer2.join().unwrap();
+
+    // Read all available messages.
+    let mut received = Vec::new();
+    loop {
+        match sub.try_recv() {
+            Ok(v) => received.push(v),
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Lagged { .. }) => {}
+        }
+    }
+
+    // Verify: we received some messages and no values are corrupted.
+    // Values are interleaved (even from writer1, odd from writer2), so we
+    // cannot assert monotonic *value* order. Instead, verify each value is
+    // in the expected range and separate the streams.
+    let mut evens = Vec::new();
+    let mut odds = Vec::new();
+    for &v in &received {
+        assert!(v < 2 * n, "value {v} out of range");
+        if v % 2 == 0 {
+            evens.push(v / 2);
+        } else {
+            odds.push((v - 1) / 2);
+        }
+    }
+
+    // Within each producer's stream, values must appear in order
+    // (may have gaps from lag).
+    for window in evens.windows(2) {
+        assert!(
+            window[1] > window[0],
+            "even stream out of order: {} -> {}",
+            window[0],
+            window[1]
+        );
+    }
+    for window in odds.windows(2) {
+        assert!(
+            window[1] > window[0],
+            "odd stream out of order: {} -> {}",
+            window[0],
+            window[1]
+        );
+    }
+
+    assert!(!received.is_empty(), "should have received some messages");
+}
+
+#[test]
+fn mpmc_ordering() {
+    // Verify that messages from a single MPMC channel arrive in the order
+    // their sequence numbers were claimed, not in the order values happen
+    // to be written.
+    let (pub_, subs) = channel_mpmc::<u64>(64);
+    let mut sub = subs.subscribe();
+
+    // Sequential publishes — sequence order matches publish order.
+    for i in 0..20 {
+        pub_.publish(i);
+    }
+
+    for i in 0..20 {
+        assert_eq!(sub.try_recv(), Ok(i));
+    }
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[test]
+fn mpmc_stress() {
+    // 4 publishers, 2 subscribers, 10K messages each publisher.
+    // (Kept modest because the CAS-based cursor is serialised — debug mode
+    //  would be very slow with higher counts.)
+    let (pub_, subs) = channel_mpmc::<u64>(4096);
+    let n_per_pub = 10_000u64;
+    let n_pubs = 4u64;
+    let total = n_per_pub * n_pubs;
+
+    let mut sub1 = subs.subscribe();
+    let mut sub2 = subs.subscribe();
+
+    let mut writers = Vec::new();
+    for pid in 0..n_pubs {
+        let p = pub_.clone();
+        writers.push(std::thread::spawn(move || {
+            for i in 0..n_per_pub {
+                // Encode publisher ID and sequence in the value.
+                p.publish(pid * n_per_pub + i);
+            }
+        }));
+    }
+
+    let reader1 = std::thread::spawn(move || {
+        let mut count = 0u64;
+        loop {
+            match sub1.try_recv() {
+                Ok(_v) => {
+                    count += 1;
+                    if count >= total {
+                        break;
+                    }
+                }
+                Err(TryRecvError::Empty) => {
+                    if count >= total {
+                        break;
+                    }
+                    core::hint::spin_loop();
+                }
+                Err(TryRecvError::Lagged { skipped }) => {
+                    count += skipped;
+                }
+            }
+        }
+        count
+    });
+
+    let reader2 = std::thread::spawn(move || {
+        let mut count = 0u64;
+        loop {
+            match sub2.try_recv() {
+                Ok(_v) => {
+                    count += 1;
+                    if count >= total {
+                        break;
+                    }
+                }
+                Err(TryRecvError::Empty) => {
+                    if count >= total {
+                        break;
+                    }
+                    core::hint::spin_loop();
+                }
+                Err(TryRecvError::Lagged { skipped }) => {
+                    count += skipped;
+                }
+            }
+        }
+        count
+    });
+
+    for w in writers {
+        w.join().unwrap();
+    }
+
+    let c1 = reader1.join().unwrap();
+    let c2 = reader2.join().unwrap();
+
+    // Both readers should see all messages (received + lagged = total).
+    assert_eq!(c1, total, "reader1 saw {c1} of {total}");
+    assert_eq!(c2, total, "reader2 saw {c2} of {total}");
+}
+
+#[test]
+fn mpmc_published_count() {
+    let (pub_, _subs) = channel_mpmc::<u64>(64);
+    assert_eq!(pub_.published(), 0);
+
+    pub_.publish(1);
+    assert_eq!(pub_.published(), 1);
+
+    pub_.publish(2);
+    pub_.publish(3);
+    assert_eq!(pub_.published(), 3);
+}
+
+#[test]
+fn mpmc_capacity() {
+    let (pub_, _subs) = channel_mpmc::<u64>(128);
+    assert_eq!(pub_.capacity(), 128);
+}
+
+#[test]
+fn mpmc_subscribe_sees_only_future() {
+    let (pub_, subs) = channel_mpmc::<u64>(64);
+    pub_.publish(1);
+    pub_.publish(2);
+
+    let mut sub = subs.subscribe();
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+
+    pub_.publish(3);
+    assert_eq!(sub.try_recv(), Ok(3));
+}
+
+#[test]
+fn mpmc_latest() {
+    let (pub_, subs) = channel_mpmc::<u64>(64);
+    let mut sub = subs.subscribe();
+
+    for i in 0..10 {
+        pub_.publish(i);
+    }
+
+    assert_eq!(sub.latest(), Some(9));
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[test]
+fn mpmc_pending() {
+    let (pub_, subs) = channel_mpmc::<u64>(64);
+    let mut sub = subs.subscribe();
+
+    assert_eq!(sub.pending(), 0);
+    pub_.publish(1);
+    assert_eq!(sub.pending(), 1);
+    pub_.publish(2);
+    pub_.publish(3);
+    assert_eq!(sub.pending(), 3);
+
+    sub.try_recv().unwrap();
+    assert_eq!(sub.pending(), 2);
+}
+
+#[test]
+fn mpmc_lag_detection() {
+    let (pub_, subs) = channel_mpmc::<u64>(4);
+    let mut sub = subs.subscribe();
+
+    // Publish 6 messages into a 4-slot ring — overflow by 2.
+    for i in 0..6 {
+        pub_.publish(i);
+    }
+
+    let err = sub.try_recv().unwrap_err();
+    assert_eq!(err, TryRecvError::Lagged { skipped: 2 });
+
+    assert_eq!(sub.try_recv(), Ok(2));
+    assert_eq!(sub.try_recv(), Ok(3));
+    assert_eq!(sub.try_recv(), Ok(4));
+    assert_eq!(sub.try_recv(), Ok(5));
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[test]
+fn mpmc_blocking_recv() {
+    let (pub_, subs) = channel_mpmc::<u64>(64);
+    let mut sub = subs.subscribe();
+
+    let writer = std::thread::spawn(move || {
+        for i in 0..10 {
+            std::thread::sleep(std::time::Duration::from_micros(100));
+            pub_.publish(i);
+        }
+    });
+
+    for i in 0..10 {
+        let v = sub.recv();
+        assert_eq!(v, i);
+    }
+
+    writer.join().unwrap();
+}
+
+#[test]
+fn mpmc_clone_is_independent() {
+    let (pub_, subs) = channel_mpmc::<u64>(64);
+    let pub2 = pub_.clone();
+    let pub3 = pub_.clone();
+
+    // All three clones should be able to publish.
+    pub_.publish(10);
+    pub2.publish(20);
+    pub3.publish(30);
+
+    let mut sub = subs.subscribe_from_oldest();
+    assert_eq!(sub.try_recv(), Ok(10));
+    assert_eq!(sub.try_recv(), Ok(20));
+    assert_eq!(sub.try_recv(), Ok(30));
 }
