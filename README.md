@@ -172,6 +172,13 @@ full analysis and chart.
 primitive. Use crossbeam when you need point-to-point; use Photon Ring when every
 subscriber should see every message.
 
+**Note on comparison methodology:** All Disruptor numbers are measured against
+[`disruptor-rs`](https://crates.io/crates/disruptor) v4.0.0 (the Rust port), not the
+original Java LMAX Disruptor. The two implementations share the same design (sequence
+barriers, pre-allocated ring) but differ in language runtime. A cross-language
+comparison against the Java original on matched hardware would be a valuable future
+exercise.
+
 ## API
 
 ### Channels

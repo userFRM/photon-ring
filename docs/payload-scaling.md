@@ -37,7 +37,13 @@ incur proportionally higher memcpy cost. This page quantifies the tradeoff.
 
 ### Cross-Thread Roundtrip (publisher and subscriber on different cores)
 
-| Payload | Photon Ring | Disruptor (est.) | Photon Ring advantage |
+**Note:** This harness uses a different benchmark structure than the main throughput
+suite. The 117 ns at 8B here vs 95 ns in the main benchmarks reflects differences in
+Criterion warm-up, iterator structure, and type-generic overhead. The Disruptor column
+is modeled (not measured at each payload size) using the baseline 133 ns from the
+actual `disruptor` crate benchmark plus estimated per-cache-line transfer costs.
+
+| Payload | Photon Ring (measured) | Disruptor (modeled) | Photon Ring advantage |
 |---------|-------------|------------------|-----------------------|
 | 8 B | 117 ns | 133 ns | 12% faster |
 | 64 B | 125 ns | 145 ns | 14% faster |

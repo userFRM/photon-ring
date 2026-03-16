@@ -85,7 +85,7 @@ ax1.annotate('56B = 1 cache line\n(with 8B stamp)', xy=(56, max(same_thread_ns)*
 ax2.plot(payload_bytes, cross_thread_ns, 'o-', color='#2196F3', linewidth=2.5,
          markersize=8, label='Photon Ring (seqlock + memcpy)')
 ax2.plot(payload_bytes, disruptor_ns, 's--', color='#FF5722', linewidth=2.5,
-         markersize=8, label='Disruptor (in-place, estimated)')
+         markersize=8, label='Disruptor (in-place, modeled)')
 
 # Find crossover point
 for i in range(len(payload_bytes) - 1):
