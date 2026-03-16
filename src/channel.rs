@@ -1,9 +1,10 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::ring::SharedRing;
+use crate::ring::{Padded, SharedRing};
+use crate::wait::WaitStrategy;
 use alloc::sync::Arc;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -18,6 +19,15 @@ pub enum TryRecvError {
     Lagged { skipped: u64 },
 }
 
+/// Error returned by [`Publisher::try_publish`] when the ring is full
+/// and backpressure is enabled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublishError<T> {
+    /// The slowest consumer is within the backpressure watermark.
+    /// Contains the value that was not published.
+    Full(T),
+}
+
 // ---------------------------------------------------------------------------
 // Publisher (single-producer write side)
 // ---------------------------------------------------------------------------
@@ -30,6 +40,9 @@ pub enum TryRecvError {
 pub struct Publisher<T: Copy> {
     ring: Arc<SharedRing<T>>,
     seq: u64,
+    /// Cached minimum cursor from the last tracker scan. Used as a fast-path
+    /// check to avoid scanning on every `try_publish` call.
+    cached_slowest: u64,
 }
 
 unsafe impl<T: Copy + Send> Send for Publisher<T> {}
@@ -41,6 +54,40 @@ impl<T: Copy> Publisher<T> {
         self.ring.slot(self.seq).write(self.seq, value);
         self.ring.cursor.0.store(self.seq, Ordering::Release);
         self.seq += 1;
+    }
+
+    /// Try to publish a single value with backpressure awareness.
+    ///
+    /// - On a regular (lossy) channel created with [`channel()`], this always
+    ///   succeeds — it publishes the value and returns `Ok(())`.
+    /// - On a bounded channel created with [`channel_bounded()`], this checks
+    ///   whether the slowest subscriber has fallen too far behind. If
+    ///   `publisher_seq - slowest_cursor >= capacity - watermark`, it returns
+    ///   `Err(PublishError::Full(value))` without writing.
+    #[inline]
+    pub fn try_publish(&mut self, value: T) -> Result<(), PublishError<T>> {
+        if let Some(bp) = self.ring.backpressure.as_ref() {
+            let capacity = self.ring.capacity();
+            let effective = capacity - bp.watermark;
+
+            // Fast path: use cached slowest cursor.
+            if self.seq >= self.cached_slowest + effective {
+                // Slow path: rescan all trackers.
+                match self.ring.slowest_cursor() {
+                    Some(slowest) => {
+                        self.cached_slowest = slowest;
+                        if self.seq >= slowest + effective {
+                            return Err(PublishError::Full(value));
+                        }
+                    }
+                    None => {
+                        // No subscribers registered yet — ring is unbounded.
+                    }
+                }
+            }
+        }
+        self.publish(value);
+        Ok(())
     }
 
     /// Publish a batch of values with a single cursor update.
@@ -103,9 +150,11 @@ impl<T: Copy> Subscribable<T> {
     pub fn subscribe(&self) -> Subscriber<T> {
         let head = self.ring.cursor.0.load(Ordering::Acquire);
         let start = if head == u64::MAX { 0 } else { head + 1 };
+        let tracker = self.ring.register_tracker(start);
         Subscriber {
             ring: self.ring.clone(),
             cursor: start,
+            tracker,
         }
     }
 
@@ -136,9 +185,11 @@ impl<T: Copy> Subscribable<T> {
         } else {
             0
         };
+        let tracker = self.ring.register_tracker(start);
         Subscriber {
             ring: self.ring.clone(),
             cursor: start,
+            tracker,
         }
     }
 }
@@ -153,6 +204,9 @@ impl<T: Copy> Subscribable<T> {
 pub struct Subscriber<T: Copy> {
     ring: Arc<SharedRing<T>>,
     cursor: u64,
+    /// Per-subscriber cursor tracker for backpressure. `None` on regular
+    /// (lossy) channels — zero overhead.
+    tracker: Option<Arc<Padded<AtomicU64>>>,
 }
 
 unsafe impl<T: Copy + Send> Send for Subscriber<T> {}
@@ -180,6 +234,7 @@ impl<T: Copy> Subscriber<T> {
             match slot.try_read(self.cursor) {
                 Ok(Some(value)) => {
                     self.cursor += 1;
+                    self.update_tracker();
                     return value;
                 }
                 Ok(None) => {}
@@ -195,6 +250,7 @@ impl<T: Copy> Subscriber<T> {
             match slot.try_read(self.cursor) {
                 Ok(Some(value)) => {
                     self.cursor += 1;
+                    self.update_tracker();
                     return value;
                 }
                 Ok(None) => core::hint::spin_loop(),
@@ -218,6 +274,39 @@ impl<T: Copy> Subscriber<T> {
                 Ok(val) => return val,
                 Err(TryRecvError::Empty) => core::hint::spin_loop(),
                 Err(TryRecvError::Lagged { .. }) => {}
+            }
+        }
+    }
+
+    /// Block until the next message using the given [`WaitStrategy`].
+    ///
+    /// Unlike [`recv()`](Self::recv), which hard-codes a two-phase spin,
+    /// this method delegates idle behaviour to the strategy — enabling
+    /// yield-based, park-based, or adaptive waiting.
+    ///
+    /// # Example
+    /// ```
+    /// use photon_ring::{channel, WaitStrategy};
+    ///
+    /// let (mut p, s) = channel::<u64>(64);
+    /// let mut sub = s.subscribe();
+    /// p.publish(7);
+    /// assert_eq!(sub.recv_with(WaitStrategy::BusySpin), 7);
+    /// ```
+    #[inline]
+    pub fn recv_with(&mut self, strategy: WaitStrategy) -> T {
+        let mut iter: u32 = 0;
+        loop {
+            match self.try_recv() {
+                Ok(val) => return val,
+                Err(TryRecvError::Empty) => {
+                    strategy.wait(iter);
+                    iter = iter.saturating_add(1);
+                }
+                Err(TryRecvError::Lagged { .. }) => {
+                    // Cursor was advanced by try_recv — retry immediately.
+                    iter = 0;
+                }
             }
         }
     }
@@ -256,6 +345,15 @@ impl<T: Copy> Subscriber<T> {
         }
     }
 
+    /// Update the backpressure tracker to reflect the current cursor position.
+    /// No-op on regular (lossy) channels.
+    #[inline]
+    fn update_tracker(&self) {
+        if let Some(ref tracker) = self.tracker {
+            tracker.0.store(self.cursor, Ordering::Release);
+        }
+    }
+
     /// Stamp-only fast-path read. The consumer's local `self.cursor` tells us
     /// which slot and expected stamp to check — no shared cursor load needed
     /// on the hot path.
@@ -267,6 +365,7 @@ impl<T: Copy> Subscriber<T> {
         match slot.try_read(self.cursor) {
             Ok(Some(value)) => {
                 self.cursor += 1;
+                self.update_tracker();
                 Ok(value)
             }
             Ok(None) => {
@@ -295,6 +394,7 @@ impl<T: Copy> Subscriber<T> {
                         if self.cursor < oldest {
                             let skipped = oldest - self.cursor;
                             self.cursor = oldest;
+                            self.update_tracker();
                             return Err(TryRecvError::Lagged { skipped });
                         }
                     }
@@ -393,6 +493,36 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
         }
     }
 
+    /// Block until the next message using the given [`WaitStrategy`].
+    ///
+    /// Like [`Subscriber::recv_with`], but for the grouped fast path.
+    ///
+    /// # Example
+    /// ```
+    /// use photon_ring::{channel, WaitStrategy};
+    ///
+    /// let (mut p, s) = channel::<u64>(64);
+    /// let mut group = s.subscribe_group::<2>();
+    /// p.publish(42);
+    /// assert_eq!(group.recv_with(WaitStrategy::BusySpin), 42);
+    /// ```
+    #[inline]
+    pub fn recv_with(&mut self, strategy: WaitStrategy) -> T {
+        let mut iter: u32 = 0;
+        loop {
+            match self.try_recv() {
+                Ok(val) => return val,
+                Err(TryRecvError::Empty) => {
+                    strategy.wait(iter);
+                    iter = iter.saturating_add(1);
+                }
+                Err(TryRecvError::Lagged { .. }) => {
+                    iter = 0;
+                }
+            }
+        }
+    }
+
     /// How many of the `N` cursors are at the minimum (aligned) position.
     pub fn aligned_count(&self) -> usize {
         let min = self.cursors.iter().copied().min().unwrap_or(0);
@@ -413,12 +543,12 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
 }
 
 // ---------------------------------------------------------------------------
-// Constructor
+// Constructors
 // ---------------------------------------------------------------------------
 
 /// Create a Photon SPMC channel.
 ///
-/// `capacity` must be a power of two (≥ 2). Returns the single-producer
+/// `capacity` must be a power of two (>= 2). Returns the single-producer
 /// write end and a clone-able factory for creating consumers.
 ///
 /// # Example
@@ -434,6 +564,57 @@ pub fn channel<T: Copy + Send>(capacity: usize) -> (Publisher<T>, Subscribable<T
         Publisher {
             ring: ring.clone(),
             seq: 0,
+            cached_slowest: 0,
+        },
+        Subscribable { ring },
+    )
+}
+
+/// Create a backpressure-capable SPMC channel.
+///
+/// The publisher will refuse to publish (returning [`PublishError::Full`])
+/// when it would overwrite a slot that the slowest subscriber hasn't
+/// read yet, minus `watermark` slots of headroom.
+///
+/// Unlike the default lossy [`channel()`], no messages are ever dropped.
+///
+/// # Arguments
+/// - `capacity` — ring size, must be a power of two (>= 2).
+/// - `watermark` — headroom slots; must be less than `capacity`.
+///   A watermark of 0 means the publisher blocks as soon as all slots are
+///   occupied. A watermark of `capacity - 1` means it blocks when only one
+///   slot is free.
+///
+/// # Example
+/// ```
+/// use photon_ring::channel_bounded;
+/// use photon_ring::PublishError;
+///
+/// let (mut p, s) = channel_bounded::<u64>(4, 0);
+/// let mut sub = s.subscribe();
+///
+/// // Fill the ring (4 slots).
+/// for i in 0u64..4 {
+///     p.try_publish(i).unwrap();
+/// }
+///
+/// // Ring is full — backpressure kicks in.
+/// assert_eq!(p.try_publish(99u64), Err(PublishError::Full(99)));
+///
+/// // Drain one slot — publisher can continue.
+/// assert_eq!(sub.try_recv(), Ok(0));
+/// p.try_publish(99).unwrap();
+/// ```
+pub fn channel_bounded<T: Copy + Send>(
+    capacity: usize,
+    watermark: usize,
+) -> (Publisher<T>, Subscribable<T>) {
+    let ring = Arc::new(SharedRing::new_bounded(capacity, watermark));
+    (
+        Publisher {
+            ring: ring.clone(),
+            seq: 0,
+            cached_slowest: 0,
         },
         Subscribable { ring },
     )

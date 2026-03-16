@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-16
+
+### Added
+- **`WaitStrategy` enum:** Configurable consumer wait behavior —
+  `BusySpin` (zero wakeup latency), `YieldSpin` (SMT-friendly, requires `std`),
+  `Park` (near-zero CPU, requires `std`), `Adaptive { spin_iters, yield_iters }`
+  (three-phase escalation, default). New methods `Subscriber::recv_with(strategy)`
+  and `SubscriberGroup::recv_with(strategy)`.
+- **`channel_bounded()` with backpressure:** `try_publish()` returns
+  `Err(PublishError::Full(value))` when the ring is full instead of overwriting.
+  Per-subscriber cursor tracking with publisher-side min-scan on the slow path.
+  Zero overhead on the default lossy `channel()`.
+- **Core affinity helpers** (behind `affinity` feature, default on):
+  `affinity::pin_to_core(index)`, `affinity::pin_to_core_id(CoreId)`,
+  `affinity::available_cores()`. Critical for HFT core placement.
+- **`std` feature** (default on): Gates `WaitStrategy::YieldSpin` and `Park`
+  variants. Core channel and bus remain fully `no_std` + `alloc`.
+- **ROADMAP.md:** v0.4.0–v0.6.0 feature plan plus future research directions.
+
 ## [0.3.0] - 2026-03-16
 
 ### Added

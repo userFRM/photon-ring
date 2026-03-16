@@ -39,10 +39,20 @@
 
 extern crate alloc;
 
+#[cfg(feature = "std")]
+extern crate std;
+
+#[cfg(feature = "affinity")]
+pub mod affinity;
 mod bus;
 pub mod channel;
 pub(crate) mod ring;
 pub(crate) mod slot;
+pub mod wait;
 
 pub use bus::Photon;
-pub use channel::{channel, Publisher, Subscribable, Subscriber, SubscriberGroup, TryRecvError};
+pub use channel::{
+    channel, channel_bounded, PublishError, Publisher, Subscribable, Subscriber, SubscriberGroup,
+    TryRecvError,
+};
+pub use wait::WaitStrategy;

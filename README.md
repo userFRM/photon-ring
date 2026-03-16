@@ -252,9 +252,47 @@ let n = sub.pending();       // messages available (capped at capacity)
 let n = pub_.published();    // total messages published
 ```
 
-**Important:** `recv()` busy-spins (`core::hint::spin_loop`) and will consume 100% of one
-CPU core while waiting. Use `try_recv()` with your own backoff strategy if this is
-unacceptable.
+**Wait strategies:** `recv()` uses a two-phase spin by default. For control over
+CPU usage vs latency, use `recv_with()`:
+
+```rust
+use photon_ring::WaitStrategy;
+
+// Lowest latency — 100% CPU, use on dedicated pinned cores
+let value = sub.recv_with(WaitStrategy::BusySpin);
+
+// Balanced — spin 64 iters, yield 64, then park
+let value = sub.recv_with(WaitStrategy::default());
+```
+
+### Backpressure (bounded channel)
+
+When message loss is unacceptable (e.g., order fill notifications):
+
+```rust
+use photon_ring::{channel_bounded, PublishError};
+
+let (mut pub_, subs) = channel_bounded::<u64>(1024, 0);
+let mut sub = subs.subscribe();
+
+// try_publish returns Full instead of overwriting
+match pub_.try_publish(42u64) {
+    Ok(()) => { /* published */ }
+    Err(PublishError::Full(val)) => { /* ring full, val returned */ }
+}
+```
+
+### Core Affinity (feature: `affinity`, default on)
+
+Pin threads to specific CPU cores for deterministic cache coherence latency:
+
+```rust,no_run
+use photon_ring::affinity;
+
+let cores = affinity::available_cores();
+// Pin publisher to core 0, subscriber to core 1
+affinity::pin_to_core(0);
+```
 
 ### SubscriberGroup (batched fanout)
 

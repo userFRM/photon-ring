@@ -1,7 +1,7 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use photon_ring::{channel, Photon, TryRecvError};
+use photon_ring::{channel, channel_bounded, Photon, PublishError, TryRecvError};
 
 // -------------------------------------------------------------------------
 // Basic publish / receive
@@ -480,4 +480,195 @@ fn published_count() {
 fn capacity_query() {
     let (p, _s) = channel::<u64>(128);
     assert_eq!(p.capacity(), 128);
+}
+
+// -------------------------------------------------------------------------
+// Bounded channel (backpressure)
+// -------------------------------------------------------------------------
+
+#[test]
+fn bounded_basic_publish_recv() {
+    let (mut p, s) = channel_bounded::<u64>(8, 0);
+    let mut sub = s.subscribe();
+
+    // Publish and receive a few messages.
+    for i in 0..5 {
+        p.try_publish(i).unwrap();
+    }
+    for i in 0..5 {
+        assert_eq!(sub.try_recv(), Ok(i));
+    }
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[test]
+fn bounded_try_publish_returns_full() {
+    let (mut p, s) = channel_bounded::<u64>(4, 0);
+    let mut sub = s.subscribe();
+
+    // Fill all 4 slots.
+    for i in 0..4 {
+        p.try_publish(i).unwrap();
+    }
+
+    // Ring is full — backpressure should kick in.
+    assert_eq!(p.try_publish(99), Err(PublishError::Full(99)));
+
+    // Value was not consumed — verify the ring still holds 0..4.
+    for i in 0..4 {
+        assert_eq!(sub.try_recv(), Ok(i));
+    }
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[test]
+fn bounded_backpressure_releases_when_consumer_catches_up() {
+    let (mut p, s) = channel_bounded::<u64>(4, 0);
+    let mut sub = s.subscribe();
+
+    // Fill ring.
+    for i in 0..4 {
+        p.try_publish(i).unwrap();
+    }
+    assert_eq!(p.try_publish(100), Err(PublishError::Full(100)));
+
+    // Drain one slot — frees capacity for one more.
+    assert_eq!(sub.try_recv(), Ok(0));
+
+    // Now publisher can write again.
+    p.try_publish(100).unwrap();
+
+    // But not two in a row.
+    assert_eq!(p.try_publish(200), Err(PublishError::Full(200)));
+
+    // Drain all remaining.
+    assert_eq!(sub.try_recv(), Ok(1));
+    assert_eq!(sub.try_recv(), Ok(2));
+    assert_eq!(sub.try_recv(), Ok(3));
+    assert_eq!(sub.try_recv(), Ok(100));
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[test]
+fn bounded_watermark_provides_headroom() {
+    // capacity=8, watermark=2 means effective capacity = 6.
+    let (mut p, s) = channel_bounded::<u64>(8, 2);
+    let mut _sub = s.subscribe();
+
+    // Should be able to publish exactly 6 messages.
+    for i in 0..6 {
+        p.try_publish(i).unwrap();
+    }
+    // 7th should fail (watermark reserves 2 slots).
+    assert_eq!(p.try_publish(99), Err(PublishError::Full(99)));
+}
+
+#[test]
+fn bounded_multiple_subscribers_slowest_controls_backpressure() {
+    let (mut p, s) = channel_bounded::<u64>(4, 0);
+    let mut fast = s.subscribe();
+    let mut slow = s.subscribe();
+
+    // Fill ring.
+    for i in 0..4 {
+        p.try_publish(i).unwrap();
+    }
+    assert_eq!(p.try_publish(99), Err(PublishError::Full(99)));
+
+    // Fast reader drains everything.
+    for i in 0..4 {
+        assert_eq!(fast.try_recv(), Ok(i));
+    }
+
+    // Ring is still full from slow reader's perspective.
+    assert_eq!(p.try_publish(99), Err(PublishError::Full(99)));
+
+    // Slow reader reads one message — frees one slot.
+    assert_eq!(slow.try_recv(), Ok(0));
+    p.try_publish(99).unwrap();
+
+    // Still blocked because slow reader is still behind.
+    assert_eq!(p.try_publish(200), Err(PublishError::Full(200)));
+}
+
+#[test]
+fn bounded_no_subscribers_allows_unlimited_publish() {
+    // If no subscribers have been created, there is no slowest cursor
+    // to block on — the ring behaves like an unbounded lossy channel.
+    let (mut p, _s) = channel_bounded::<u64>(4, 0);
+
+    for i in 0..100 {
+        p.try_publish(i).unwrap();
+    }
+    assert_eq!(p.published(), 100);
+}
+
+#[test]
+fn regular_channel_try_publish_always_succeeds() {
+    // Regular (lossy) channel — try_publish is just publish + Ok.
+    let (mut p, s) = channel::<u64>(4);
+    let mut _sub = s.subscribe();
+
+    // Publish way more than capacity — no backpressure, all succeed.
+    for i in 0..100 {
+        p.try_publish(i).unwrap();
+    }
+    assert_eq!(p.published(), 100);
+}
+
+#[test]
+fn bounded_full_cycle_stress() {
+    // Publish and drain in lockstep, cycling the ring many times.
+    let (mut p, s) = channel_bounded::<u64>(4, 0);
+    let mut sub = s.subscribe();
+
+    for cycle in 0..1000u64 {
+        for slot in 0..4u64 {
+            let val = cycle * 4 + slot;
+            p.try_publish(val).unwrap();
+        }
+        assert_eq!(p.try_publish(9999), Err(PublishError::Full(9999)));
+        for slot in 0..4u64 {
+            let val = cycle * 4 + slot;
+            assert_eq!(sub.try_recv(), Ok(val));
+        }
+    }
+}
+
+#[test]
+fn bounded_cross_thread() {
+    let (mut p, s) = channel_bounded::<u64>(64, 0);
+    let mut sub = s.subscribe();
+    let n = 100_000u64;
+
+    let writer = std::thread::spawn(move || {
+        for i in 0..n {
+            loop {
+                match p.try_publish(i) {
+                    Ok(()) => break,
+                    Err(PublishError::Full(_)) => core::hint::spin_loop(),
+                }
+            }
+        }
+    });
+
+    let reader = std::thread::spawn(move || {
+        for expected in 0..n {
+            loop {
+                match sub.try_recv() {
+                    Ok(v) => {
+                        assert_eq!(v, expected, "corruption at seq {expected}");
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => core::hint::spin_loop(),
+                    Err(TryRecvError::Lagged { .. }) => {
+                        panic!("bounded channel should never lag");
+                    }
+                }
+            }
+        }
+    });
+
+    writer.join().unwrap();
+    reader.join().unwrap();
 }

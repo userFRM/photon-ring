@@ -1,6 +1,6 @@
 [package]
 name = "photon-ring"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."
 license = "MIT OR Apache-2.0"
@@ -11,9 +11,15 @@ repository = "https://github.com/userFRM/photon-ring"
 homepage = "https://github.com/userFRM/photon-ring"
 documentation = "https://docs.rs/photon-ring"
 
+[features]
+default = ["std", "affinity"]
+std = []
+affinity = ["std", "dep:core_affinity"]
+
 [dependencies]
 hashbrown = "0.16.1"
 spin = "0.10.0"
+core_affinity = { version = "0.8", optional = true }
 
 [dev-dependencies]
 criterion = "0.8.2"
