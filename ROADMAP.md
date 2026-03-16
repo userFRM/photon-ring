@@ -24,24 +24,27 @@
 - [x] `Adaptive { spin_iters, yield_iters }` — three-phase escalation (default)
 - [x] `recv_with(strategy)` on both `Subscriber` and `SubscriberGroup`
 
-## v0.5.0 — HFT-Grade Infrastructure
+## v0.5.0 — HFT-Grade Infrastructure (DONE)
 
-### Kernel-Bypass Integration
-- [ ] Example: DPDK → Photon Ring → strategy threads pipeline
-- [ ] Example: Solarflare ef_vi → Photon Ring fan-out
+### Memory Control (DONE)
+- [x] Huge page allocation (2MB) via `mmap` + `MAP_HUGETLB` (`mem::mmap_huge_pages`)
+- [x] `Publisher::mlock()` — lock ring pages in RAM (prevent swap/page faults)
+- [x] `Publisher::prefault()` — pre-fault all ring pages on demand
+- [x] Cache line alignment verified at compile time (`const_assert` on `Slot`)
+- [ ] NUMA-aware allocation via `set_mempolicy` (v0.6.0)
 
-### Memory Control
-- [ ] Huge page allocation (2MB / 1GB) via `mmap` + `MAP_HUGETLB`
-- [ ] `mlock` / `mlockall` for ring buffer pages (prevent page faults on hot path)
-- [ ] Cache line padding verification at compile time (`static_assert` on `Slot` size)
-- [ ] Pre-fault all ring pages on construction
-- [ ] NUMA-aware allocation via `set_mempolicy`
+### Observability (DONE)
+- [x] `Subscriber::total_received()` / `total_lagged()` / `receive_ratio()`
+- [x] `SubscriberGroup::total_received()` / `total_lagged()` / `receive_ratio()`
+- [x] `Publisher::sequence()` — current sequence for lag computation
+- [ ] Optional RDTSC-stamped latency histogram (v0.6.0)
+- [ ] Prometheus / StatsD export (v0.6.0)
 
-### Observability
-- [ ] Per-subscriber lag counters (total drops, max lag depth)
-- [ ] Publisher sequence watermark (exportable to Prometheus / StatsD)
-- [ ] Optional RDTSC-stamped latency histogram (compile-time feature gate)
-- [ ] `SubscriberGroup::aligned_count()` already exists — extend to per-cursor stats
+### Examples (DONE)
+- [x] `examples/pinned_latency.rs` — core-pinned RDTSC latency measurement
+- [x] `examples/backpressure.rs` — reliable order fill pipeline
+- [ ] Example: DPDK → Photon Ring pipeline (v0.6.0)
+- [ ] Example: Solarflare ef_vi → Photon Ring fan-out (v0.6.0)
 
 ## v0.6.0 — Advanced Patterns
 

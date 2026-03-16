@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-03-16
+
+### Added
+- **Memory control** (`hugepages` feature, Linux): `Publisher::mlock()` locks ring
+  pages in RAM, `Publisher::prefault()` pre-faults all pages. `mem::mmap_huge_pages()`
+  for 2MB huge page allocation. Compile-time `Slot` alignment assertion.
+- **Observability counters:** `Subscriber::total_received()`, `total_lagged()`,
+  `receive_ratio()` on both `Subscriber` and `SubscriberGroup`. Zero-cost — plain
+  `u64` fields incremented on the fast path.
+- **`Publisher::sequence()`** alias for computing subscriber lag.
+- **`examples/pinned_latency.rs`** — core-pinned RDTSC latency measurement demo.
+- **`examples/backpressure.rs`** — reliable order fill pipeline with `channel_bounded`.
+
+## [0.4.1] - 2026-03-16
+
+### Changed
+- Kill `std` feature entirely. All wait strategies pure `no_std`.
+- Replace `Park` with `BackoffSpin` (exponential PAUSE backoff).
+- Switch `core_affinity` to `core_affinity2` (no_std compatible).
+
 ## [0.4.0] - 2026-03-16
 
 ### Added

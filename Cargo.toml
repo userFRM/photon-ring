@@ -1,6 +1,6 @@
 [package]
 name = "photon-ring"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 description = "Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."
 license = "MIT OR Apache-2.0"
@@ -14,11 +14,13 @@ documentation = "https://docs.rs/photon-ring"
 [features]
 default = ["affinity"]
 affinity = ["dep:core_affinity2"]
+hugepages = ["dep:libc"]
 
 [dependencies]
 hashbrown = "0.16.1"
 spin = "0.10.0"
 core_affinity2 = { version = "0.15", optional = true }
+libc = { version = "0.2", default-features = false, optional = true }
 
 [dev-dependencies]
 criterion = "0.8.2"
@@ -26,6 +28,13 @@ disruptor = "4.0.0"
 
 [[example]]
 name = "market_data"
+
+[[example]]
+name = "pinned_latency"
+required-features = ["affinity"]
+
+[[example]]
+name = "backpressure"
 
 [[bench]]
 name = "throughput"

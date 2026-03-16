@@ -115,10 +115,39 @@ impl<T: Copy> Publisher<T> {
         self.seq
     }
 
+    /// Current sequence number (same as `published()`).
+    /// Useful for computing lag: `publisher.sequence() - subscriber.cursor`.
+    #[inline]
+    pub fn sequence(&self) -> u64 {
+        self.seq
+    }
+
     /// Ring capacity (power of two).
     #[inline]
     pub fn capacity(&self) -> u64 {
         self.ring.capacity()
+    }
+
+    /// Lock the ring buffer pages in RAM, preventing the OS from swapping
+    /// them to disk. Reduces worst-case latency by eliminating page-fault
+    /// stalls on the hot path.
+    ///
+    /// Returns `true` on success. Requires `CAP_IPC_LOCK` or sufficient
+    /// `RLIMIT_MEMLOCK` on Linux. No-op on other platforms.
+    #[cfg(all(target_os = "linux", feature = "hugepages"))]
+    pub fn mlock(&self) -> bool {
+        let ptr = self.ring.slots_ptr() as *const u8;
+        let len = self.ring.slots_byte_len();
+        unsafe { crate::mem::mlock_pages(ptr, len) }
+    }
+
+    /// Pre-fault all ring buffer pages by writing a zero byte to each 4 KiB
+    /// page. Ensures the first publish does not trigger a page fault.
+    #[cfg(all(target_os = "linux", feature = "hugepages"))]
+    pub fn prefault(&self) {
+        let ptr = self.ring.slots_ptr() as *mut u8;
+        let len = self.ring.slots_byte_len();
+        unsafe { crate::mem::prefault_pages(ptr, len) }
     }
 }
 
@@ -155,6 +184,8 @@ impl<T: Copy> Subscribable<T> {
             ring: self.ring.clone(),
             cursor: start,
             tracker,
+            total_lagged: 0,
+            total_received: 0,
         }
     }
 
@@ -170,6 +201,8 @@ impl<T: Copy> Subscribable<T> {
         SubscriberGroup {
             ring: self.ring.clone(),
             cursors: [start; N],
+            total_lagged: 0,
+            total_received: 0,
         }
     }
 
@@ -190,6 +223,8 @@ impl<T: Copy> Subscribable<T> {
             ring: self.ring.clone(),
             cursor: start,
             tracker,
+            total_lagged: 0,
+            total_received: 0,
         }
     }
 }
@@ -207,6 +242,10 @@ pub struct Subscriber<T: Copy> {
     /// Per-subscriber cursor tracker for backpressure. `None` on regular
     /// (lossy) channels — zero overhead.
     tracker: Option<Arc<Padded<AtomicU64>>>,
+    /// Cumulative messages skipped due to lag.
+    total_lagged: u64,
+    /// Cumulative messages successfully received.
+    total_received: u64,
 }
 
 unsafe impl<T: Copy + Send> Send for Subscriber<T> {}
@@ -345,6 +384,30 @@ impl<T: Copy> Subscriber<T> {
         }
     }
 
+    /// Total messages successfully received by this subscriber.
+    #[inline]
+    pub fn total_received(&self) -> u64 {
+        self.total_received
+    }
+
+    /// Total messages lost due to lag (consumer fell behind the ring).
+    #[inline]
+    pub fn total_lagged(&self) -> u64 {
+        self.total_lagged
+    }
+
+    /// Ratio of received to total (received + lagged). Returns 0.0 if no
+    /// messages have been processed.
+    #[inline]
+    pub fn receive_ratio(&self) -> f64 {
+        let total = self.total_received + self.total_lagged;
+        if total == 0 {
+            0.0
+        } else {
+            self.total_received as f64 / total as f64
+        }
+    }
+
     /// Update the backpressure tracker to reflect the current cursor position.
     /// No-op on regular (lossy) channels.
     #[inline]
@@ -366,6 +429,7 @@ impl<T: Copy> Subscriber<T> {
             Ok(Some(value)) => {
                 self.cursor += 1;
                 self.update_tracker();
+                self.total_received += 1;
                 Ok(value)
             }
             Ok(None) => {
@@ -395,6 +459,7 @@ impl<T: Copy> Subscriber<T> {
                             let skipped = oldest - self.cursor;
                             self.cursor = oldest;
                             self.update_tracker();
+                            self.total_lagged += skipped;
                             return Err(TryRecvError::Lagged { skipped });
                         }
                     }
@@ -426,6 +491,10 @@ impl<T: Copy> Subscriber<T> {
 pub struct SubscriberGroup<T: Copy, const N: usize> {
     ring: Arc<SharedRing<T>>,
     cursors: [u64; N],
+    /// Cumulative messages skipped due to lag.
+    total_lagged: u64,
+    /// Cumulative messages successfully received.
+    total_received: u64,
 }
 
 unsafe impl<T: Copy + Send, const N: usize> Send for SubscriberGroup<T, N> {}
@@ -451,6 +520,7 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
                         *c = first + 1;
                     }
                 }
+                self.total_received += 1;
                 Ok(value)
             }
             Ok(None) => Err(TryRecvError::Empty),
@@ -473,6 +543,7 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
                                 *c = oldest;
                             }
                         }
+                        self.total_lagged += skipped;
                         return Err(TryRecvError::Lagged { skipped });
                     }
                 }
@@ -538,6 +609,30 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
         } else {
             let raw = head - min + 1;
             raw.min(self.ring.capacity())
+        }
+    }
+
+    /// Total messages successfully received by this group.
+    #[inline]
+    pub fn total_received(&self) -> u64 {
+        self.total_received
+    }
+
+    /// Total messages lost due to lag (group fell behind the ring).
+    #[inline]
+    pub fn total_lagged(&self) -> u64 {
+        self.total_lagged
+    }
+
+    /// Ratio of received to total (received + lagged). Returns 0.0 if no
+    /// messages have been processed.
+    #[inline]
+    pub fn receive_ratio(&self) -> f64 {
+        let total = self.total_received + self.total_lagged;
+        if total == 0 {
+            0.0
+        } else {
+            self.total_received as f64 / total as f64
         }
     }
 }

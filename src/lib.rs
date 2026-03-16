@@ -43,6 +43,8 @@ extern crate alloc;
 pub mod affinity;
 mod bus;
 pub mod channel;
+#[cfg(all(target_os = "linux", feature = "hugepages"))]
+pub mod mem;
 pub(crate) mod ring;
 pub(crate) mod slot;
 pub mod wait;

@@ -83,6 +83,20 @@ impl<T: Copy> SharedRing<T> {
         unsafe { self.slots.get_unchecked((seq & self.mask) as usize) }
     }
 
+    /// Raw pointer to the start of the slot array.
+    #[allow(dead_code)]
+    #[inline]
+    pub(crate) fn slots_ptr(&self) -> *const Slot<T> {
+        self.slots.as_ptr()
+    }
+
+    /// Total byte length of the slot array.
+    #[allow(dead_code)]
+    #[inline]
+    pub(crate) fn slots_byte_len(&self) -> usize {
+        self.slots.len() * core::mem::size_of::<Slot<T>>()
+    }
+
     #[inline]
     pub(crate) fn capacity(&self) -> u64 {
         self.mask + 1

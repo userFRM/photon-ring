@@ -26,6 +26,11 @@ pub(crate) struct Slot<T> {
 unsafe impl<T: Send> Sync for Slot<T> {}
 unsafe impl<T: Send> Send for Slot<T> {}
 
+// Compile-time verification that Slot<u64> is cache-line aligned.
+// This is guaranteed by #[repr(C, align(64))], but we assert it as a safety
+// net — any future layout change will trigger a build failure.
+const _: () = assert!(core::mem::align_of::<Slot<u64>>() == 64);
+
 impl<T> Slot<T> {
     pub(crate) fn new() -> Self {
         Slot {

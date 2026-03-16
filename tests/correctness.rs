@@ -672,3 +672,127 @@ fn bounded_cross_thread() {
     writer.join().unwrap();
     reader.join().unwrap();
 }
+
+// -------------------------------------------------------------------------
+// Observability counters
+// -------------------------------------------------------------------------
+
+#[test]
+fn subscriber_counters_basic() {
+    let (mut p, s) = channel::<u64>(64);
+    let mut sub = s.subscribe();
+
+    assert_eq!(sub.total_received(), 0);
+    assert_eq!(sub.total_lagged(), 0);
+
+    for i in 0..10 {
+        p.publish(i);
+    }
+    for _ in 0..10 {
+        sub.try_recv().unwrap();
+    }
+
+    assert_eq!(sub.total_received(), 10);
+    assert_eq!(sub.total_lagged(), 0);
+}
+
+#[test]
+fn subscriber_counters_with_lag() {
+    let (mut p, s) = channel::<u64>(4);
+    let mut sub = s.subscribe();
+
+    // Publish 8 messages into a 4-slot ring — subscriber hasn't read any,
+    // so 4 messages will be overwritten.
+    for i in 0..8 {
+        p.publish(i);
+    }
+
+    // First try_recv should report lag.
+    let err = sub.try_recv().unwrap_err();
+    match err {
+        TryRecvError::Lagged { skipped } => assert_eq!(skipped, 4),
+        other => panic!("expected Lagged, got {other:?}"),
+    }
+    assert_eq!(sub.total_lagged(), 4);
+    assert_eq!(sub.total_received(), 0);
+
+    // Now read the remaining 4 messages.
+    for _ in 0..4 {
+        sub.try_recv().unwrap();
+    }
+    assert_eq!(sub.total_received(), 4);
+    assert_eq!(sub.total_lagged(), 4);
+}
+
+#[test]
+fn receive_ratio() {
+    let (mut p, s) = channel::<u64>(4);
+    let mut sub = s.subscribe();
+
+    // No messages processed — ratio should be 0.0.
+    assert_eq!(sub.receive_ratio(), 0.0);
+
+    // Publish 8 into a 4-slot ring: 4 lagged, then 4 received.
+    for i in 0..8 {
+        p.publish(i);
+    }
+
+    // Trigger lag detection.
+    let _ = sub.try_recv(); // Lagged { skipped: 4 }
+
+    // Read the remaining 4.
+    for _ in 0..4 {
+        sub.try_recv().unwrap();
+    }
+
+    // received = 4, lagged = 4 => ratio = 0.5
+    assert_eq!(sub.total_received(), 4);
+    assert_eq!(sub.total_lagged(), 4);
+    assert!((sub.receive_ratio() - 0.5).abs() < f64::EPSILON);
+}
+
+#[test]
+fn group_counters() {
+    let (mut p, s) = channel::<u64>(4);
+    let mut group = s.subscribe_group::<2>();
+
+    assert_eq!(group.total_received(), 0);
+    assert_eq!(group.total_lagged(), 0);
+    assert_eq!(group.receive_ratio(), 0.0);
+
+    // Normal receives — no lag.
+    for i in 0..4 {
+        p.publish(i);
+    }
+    for _ in 0..4 {
+        group.try_recv().unwrap();
+    }
+    assert_eq!(group.total_received(), 4);
+    assert_eq!(group.total_lagged(), 0);
+    assert!((group.receive_ratio() - 1.0).abs() < f64::EPSILON);
+
+    // Cause lag: publish 8 more into a 4-slot ring without reading.
+    for i in 10..18 {
+        p.publish(i);
+    }
+
+    // First try_recv should detect lag.
+    let err = group.try_recv().unwrap_err();
+    match err {
+        TryRecvError::Lagged { skipped } => assert!(skipped > 0),
+        other => panic!("expected Lagged, got {other:?}"),
+    }
+    assert!(group.total_lagged() > 0);
+}
+
+#[test]
+fn publisher_sequence() {
+    let (mut p, _s) = channel::<u64>(8);
+    assert_eq!(p.sequence(), 0);
+    p.publish(1);
+    assert_eq!(p.sequence(), 1);
+    p.publish_batch(&[2, 3, 4]);
+    assert_eq!(p.sequence(), 4);
+    // sequence() == published()
+    assert_eq!(p.sequence(), p.published());
+}

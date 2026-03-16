@@ -376,12 +376,13 @@ dependencies = [
 
 [[package]]
 name = "photon-ring"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "core_affinity2",
  "criterion",
  "disruptor",
  "hashbrown",
+ "libc",
  "spin",
 ]
 
