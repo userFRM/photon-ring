@@ -5,8 +5,9 @@
 //!
 //! Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers.
 //!
-//! Fully `no_std` compatible (requires `alloc`). Every type — including the
-//! named-topic [`Photon`] bus — works without the standard library.
+//! `no_std` compatible (requires `alloc`). Core channel, bus, and wait
+//! strategies work without the standard library. The [`topology`] module
+//! requires OS threads and is available on supported platforms only.
 //!
 //! ## Key design
 //!
@@ -53,14 +54,25 @@ pub mod channel;
 #[cfg(all(target_os = "linux", feature = "hugepages"))]
 pub mod mem;
 pub(crate) mod ring;
+mod shutdown;
 pub(crate) mod slot;
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "android",
+))]
+pub mod topology;
 mod typed_bus;
 pub mod wait;
 
 pub use bus::Photon;
 pub use channel::{
-    channel, channel_bounded, channel_mpmc, MpPublisher, PublishError, Publisher, Subscribable,
-    Subscriber, SubscriberGroup, TryRecvError,
+    channel, channel_bounded, channel_mpmc, Drain, MpPublisher, PublishError, Publisher,
+    Subscribable, Subscriber, SubscriberGroup, TryRecvError,
 };
+pub use shutdown::Shutdown;
 pub use typed_bus::TypedBus;
 pub use wait::WaitStrategy;

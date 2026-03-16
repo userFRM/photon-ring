@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use photon_ring::{
-    channel, channel_bounded, channel_mpmc, Photon, PublishError, TryRecvError, TypedBus,
+    channel, channel_bounded, channel_mpmc, Photon, PublishError, Shutdown, TryRecvError, TypedBus,
 };
 
 // -------------------------------------------------------------------------
@@ -1398,4 +1398,94 @@ fn typed_bus_publisher_once() {
     let bus = TypedBus::new(64);
     let _p1 = bus.publisher::<u64>("topic");
     let _p2 = bus.publisher::<u64>("topic"); // should panic
+}
+
+// -------------------------------------------------------------------------
+// Batch receive API
+// -------------------------------------------------------------------------
+
+#[test]
+fn recv_batch_basic() {
+    let (mut p, s) = channel::<u64>(64);
+    let mut sub = s.subscribe();
+
+    for i in 0..10 {
+        p.publish(i);
+    }
+
+    let mut buf = [0u64; 20];
+    let count = sub.recv_batch(&mut buf);
+    assert_eq!(count, 10);
+    for (i, val) in buf.iter().enumerate().take(10) {
+        assert_eq!(*val, i as u64);
+    }
+    // Remaining slots untouched.
+    for val in &buf[10..20] {
+        assert_eq!(*val, 0);
+    }
+}
+
+#[test]
+fn recv_batch_subscriber_group() {
+    let (mut p, s) = channel::<u64>(64);
+    let mut group = s.subscribe_group::<2>();
+
+    for i in 0..8 {
+        p.publish(i);
+    }
+
+    let mut buf = [0u64; 16];
+    let count = group.recv_batch(&mut buf);
+    assert_eq!(count, 8);
+    for (i, val) in buf.iter().enumerate().take(8) {
+        assert_eq!(*val, i as u64);
+    }
+}
+
+// -------------------------------------------------------------------------
+// Drain iterator
+// -------------------------------------------------------------------------
+
+#[test]
+fn drain_iterator() {
+    let (mut p, s) = channel::<u64>(64);
+    let mut sub = s.subscribe();
+
+    for i in 0..5 {
+        p.publish(i);
+    }
+
+    let drained: Vec<u64> = sub.drain().collect();
+    assert_eq!(drained.len(), 5);
+    for (i, &v) in drained.iter().enumerate() {
+        assert_eq!(v, i as u64);
+    }
+
+    // Nothing left.
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+}
+
+// -------------------------------------------------------------------------
+// Shutdown signal
+// -------------------------------------------------------------------------
+
+#[test]
+fn shutdown_signal() {
+    let shutdown = Shutdown::new();
+    assert!(!shutdown.is_shutdown());
+
+    let flag = shutdown.clone();
+    assert!(!flag.is_shutdown());
+
+    shutdown.trigger();
+    assert!(shutdown.is_shutdown());
+    assert!(flag.is_shutdown());
+}
+
+#[test]
+fn shutdown_default() {
+    let shutdown = Shutdown::default();
+    assert!(!shutdown.is_shutdown());
+    shutdown.trigger();
+    assert!(shutdown.is_shutdown());
 }

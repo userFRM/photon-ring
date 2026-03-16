@@ -528,6 +528,43 @@ impl<T: Copy> Subscriber<T> {
         }
     }
 
+    /// Receive up to `buf.len()` messages in a single call.
+    ///
+    /// Messages are written into the provided slice starting at index 0.
+    /// Returns the number of messages received. On lag, the cursor is
+    /// advanced and filling continues from the oldest available message.
+    #[inline]
+    pub fn recv_batch(&mut self, buf: &mut [T]) -> usize {
+        let mut count = 0;
+        for slot in buf.iter_mut() {
+            match self.try_recv() {
+                Ok(value) => {
+                    *slot = value;
+                    count += 1;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Lagged { .. }) => {
+                    // Cursor was advanced — retry from oldest available.
+                    match self.try_recv() {
+                        Ok(value) => {
+                            *slot = value;
+                            count += 1;
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    /// Returns an iterator that drains all currently available messages.
+    /// Stops when no more messages are available. Handles lag transparently
+    /// by retrying after cursor advancement.
+    pub fn drain(&mut self) -> Drain<'_, T> {
+        Drain { sub: self }
+    }
+
     /// Update the backpressure tracker to reflect the current cursor position.
     /// No-op on regular (lossy) channels.
     #[inline]
@@ -598,6 +635,34 @@ impl<T: Copy> Drop for Subscriber<T> {
             if let Some(ref bp) = self.ring.backpressure {
                 let mut trackers = bp.trackers.lock();
                 trackers.retain(|t| !Arc::ptr_eq(t, tracker));
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Drain iterator
+// ---------------------------------------------------------------------------
+
+/// An iterator that drains all currently available messages from a
+/// [`Subscriber`]. Stops when no more messages are available. Handles lag transparently
+/// by retrying after cursor advancement.
+///
+/// Created by [`Subscriber::drain`].
+pub struct Drain<'a, T: Copy> {
+    sub: &'a mut Subscriber<T>,
+}
+
+impl<'a, T: Copy> Iterator for Drain<'a, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        loop {
+            match self.sub.try_recv() {
+                Ok(v) => return Some(v),
+                Err(TryRecvError::Empty) => return None,
+                Err(TryRecvError::Lagged { .. }) => {
+                    // Cursor was advanced — retry from oldest available.
+                }
             }
         }
     }
@@ -771,6 +836,36 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
         } else {
             self.total_received as f64 / total as f64
         }
+    }
+
+    /// Receive up to `buf.len()` messages in a single call.
+    ///
+    /// Messages are written into the provided slice starting at index 0.
+    /// Returns the number of messages received. On lag, the cursor is
+    /// advanced and filling continues from the oldest available message.
+    #[inline]
+    pub fn recv_batch(&mut self, buf: &mut [T]) -> usize {
+        let mut count = 0;
+        for slot in buf.iter_mut() {
+            match self.try_recv() {
+                Ok(value) => {
+                    *slot = value;
+                    count += 1;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Lagged { .. }) => {
+                    // Cursor was advanced — retry from oldest available.
+                    match self.try_recv() {
+                        Ok(value) => {
+                            *slot = value;
+                            count += 1;
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+        count
     }
 
     /// Update the backpressure tracker to reflect the current cursor position.

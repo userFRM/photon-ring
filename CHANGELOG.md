@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-03-16
+
+### Added
+- **`topology::Pipeline` builder:** First-class pipeline topology API with
+  `Pipeline::builder().input::<T>().then(|x| transform(x)).build()`.
+  Supports chained stages on dedicated threads, fan-out via `.fan_out()`,
+  and graceful shutdown. Gated to platforms with OS thread support.
+- **`recv_batch(&mut self, buf: &mut [T]) -> usize`:** Batch receive for
+  `Subscriber` and `SubscriberGroup`. Handles lag transparently (retries
+  after cursor advancement).
+- **`drain()` iterator:** Yields all currently available messages. Handles
+  lag by retrying instead of stopping.
+- **`Shutdown` signal type:** `Arc<AtomicBool>` wrapper for coordinating
+  graceful termination of consumer loops. Clone-able, `no_std` compatible.
+- **`publish_with` closure API:** Enables in-place construction in the slot,
+  letting the compiler elide the write-side memcpy.
+- **Payload scaling benchmark** (`benches/payload_scaling.rs`) with matplotlib
+  chart (`docs/payload-scaling.png`) comparing Photon Ring vs Disruptor
+  across 8B to 4KB payloads.
+- **Raw pointer caching** in Publisher, Subscriber, SubscriberGroup, MpPublisher
+  for ~2 ns savings on hot path (eliminates Arc → Box pointer chain).
+
+### Performance
+- SubscriberGroup: O(1) fanout (2.8 ns regardless of N, was 5.3 ns for N=10)
+- try_read: happy-path-first branch order (~0.5-1.5 ns improvement)
+- Backpressure tracker: Relaxed atomics (saves ~1 ns on ARM)
+- Bus topic lookup: no String allocation on hit (~50-300 ns savings)
+
 ## [0.9.0] - 2026-03-16
 
 ### Performance (Codex-recommended optimizations)
