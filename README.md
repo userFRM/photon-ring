@@ -9,8 +9,8 @@
 **Ultra-low-latency SPMC/MPMC pub/sub using seqlock-stamped ring buffers.**
 
 Photon Ring is a pub/sub messaging library for Rust that achieves ~95 ns
-cross-thread roundtrip latency (48 ns one-way) with zero allocation on the
-hot path. `no_std` compatible, zero dependencies on the core channel path.
+cross-thread roundtrip latency (48 ns one-way), 381M msg/s throughput, with
+zero allocation on the hot path. `no_std` compatible.
 
 ```rust
 use photon_ring::{channel, channel_mpmc, Photon};
@@ -128,23 +128,33 @@ hardware for authoritative numbers.
 
 | Benchmark | Photon Ring (A) | disruptor 4.0 (A) | Photon Ring (B) | disruptor 4.0 (B) |
 |---|---|---|---|---|
-| Publish only | **2.9 ns** | 25.8 ns | **2.0 ns** | 12 ns |
-| Cross-thread roundtrip | **95 ns** | 132 ns | **103 ns** | 174 ns |
+| Publish only | **2.8 ns** | 30.6 ns | **2.0 ns** | 12 ns |
+| Cross-thread roundtrip | **95 ns** | 138 ns | **103 ns** | 174 ns |
 
 ### Detailed Benchmarks
 
 | Operation | A | B | Notes |
 |---|---|---|---|
-| `publish` (write only) | 2.9 ns | 2.0 ns | Single slot seqlock write |
-| `publish` + `try_recv` (1 sub) | 2.6 ns | -- | Stamp-only fast path |
-| Fanout: 10 independent subs | 15.9 ns | -- | ~1.3 ns per additional sub |
+| `publish` (write only) | 2.8 ns | 2.0 ns | Single slot seqlock write |
+| `publish` + `try_recv` (1 sub) | 2.7 ns | -- | Stamp-only fast path |
+| Fanout: 10 independent subs | 17 ns | -- | ~1.4 ns per additional sub |
 | **SubscriberGroup (any N)** | **2.6 ns** | -- | **O(1) -- single cursor, single seqlock read** |
-| **MPMC 1 pub, 1 sub** | **12.2 ns** | -- | CAS sequence claiming overhead |
+| **MPMC 1 pub, 1 sub** | **12.1 ns** | -- | CAS sequence claiming overhead |
 | `try_recv` (empty) | 0.85 ns | -- | Single atomic load |
-| Batch 64 + drain | 156 ns | -- | 2.4 ns/msg amortized |
+| Batch 64 + drain | 158 ns | -- | 2.5 ns/msg amortized |
 | Struct roundtrip (24B) | 4.8 ns | -- | Realistic payload size |
 | Cross-thread latency | 95 ns | 103 ns | Inter-core cache transfer |
 | One-way latency (RDTSC) | 48 ns p50 | -- | Single cache line transfer |
+
+### Throughput
+
+The `market_data` example publishes 500,000 messages per topic across 4 independent
+SPMC topics (4 publishers, 4 subscribers):
+
+| Machine | Throughput |
+|---|---|
+| **A** (Intel i7-10700KF) | 2,000,000 msgs in 5.2 ms = **381M msg/s** |
+| **B** (Apple M1 Pro) | 2,000,000 msgs in 26.4 ms = 75.6M msg/s |
 
 ### Payload Scaling
 
@@ -157,8 +167,9 @@ full analysis and chart.
 | | Photon Ring | disruptor-rs (v4) | crossbeam | bus |
 |---|---|---|---|---|
 | **Pattern** | SPMC/MPMC broadcast | SP/MP sequence barriers | MPMC queue | SPMC broadcast |
-| **Publish cost** | 2.9 ns (SPMC) / 12.2 ns (MPMC) | 25.8 ns | -- | -- |
-| **Cross-thread** | 95 ns | 132 ns | -- | -- |
+| **Publish cost** | 2.8 ns (SPMC) / 12.1 ns (MPMC) | 30.6 ns | -- | -- |
+| **Cross-thread** | 95 ns | 138 ns | -- | -- |
+| **Throughput** | 381M msg/s | -- | -- | -- |
 | **Topology builder** | `Pipeline::builder().then()` | `handleEventsWith().then()` | No | No |
 | **Batch APIs** | `recv_batch`, `drain`, `publish_batch` | Batch publishing | Iterator drain | No |
 | **Named-topic bus** | `Photon<T>`, `TypedBus` | No | No | No |
