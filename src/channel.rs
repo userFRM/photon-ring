@@ -1,6 +1,6 @@
 use crate::ring::SharedRing;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use alloc::sync::Arc;
+use core::sync::atomic::Ordering;
 
 // ---------------------------------------------------------------------------
 // Errors

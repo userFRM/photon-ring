@@ -1,5 +1,7 @@
 use crate::slot::Slot;
-use std::sync::atomic::AtomicU64;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use core::sync::atomic::AtomicU64;
 
 /// Cache-line padding to prevent false sharing between hot atomics.
 #[repr(align(64))]

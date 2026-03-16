@@ -2,10 +2,14 @@
 name = "photon-ring"
 version = "0.1.0"
 edition = "2021"
-description = "Ultra-low-latency SPMC pub/sub — the seqlock ring that makes Disruptor look slow"
+description = "Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."
 license = "MIT OR Apache-2.0"
-keywords = ["pubsub", "spmc", "seqlock", "low-latency", "zero-alloc"]
-categories = ["concurrency"]
+keywords = ["pubsub", "spmc", "seqlock", "no_std", "zero-alloc"]
+categories = ["concurrency", "no-std"]
+
+[features]
+default = ["std"]
+std = []
 
 [dev-dependencies]
 criterion = "0.5"

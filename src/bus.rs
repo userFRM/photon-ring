@@ -1,5 +1,8 @@
+extern crate std;
+
 use crate::channel::{self, Publisher, Subscribable, Subscriber};
 use std::collections::HashMap;
+use std::string::{String, ToString};
 use std::sync::Mutex;
 
 /// Named-topic pub/sub bus.

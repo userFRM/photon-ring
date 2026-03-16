@@ -1,7 +1,7 @@
-use std::cell::UnsafeCell;
-use std::mem::MaybeUninit;
-use std::ptr;
-use std::sync::atomic::{fence, AtomicU64, Ordering};
+use core::cell::UnsafeCell;
+use core::mem::MaybeUninit;
+use core::ptr;
+use core::sync::atomic::{fence, AtomicU64, Ordering};
 
 /// A cache-line-aligned slot holding a seqlock stamp and a payload.
 ///

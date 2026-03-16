@@ -1,6 +1,9 @@
-//! # Photon
+//! # Photon Ring
 //!
 //! Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers.
+//!
+//! `no_std` compatible (requires `alloc`). The named-topic [`Photon`] bus
+//! is available with the `std` feature (enabled by default).
 //!
 //! ## Key design
 //!
@@ -20,8 +23,11 @@
 //! let mut sub = subs.subscribe();
 //! pub_.publish(42);
 //! assert_eq!(sub.try_recv(), Ok(42));
+//! ```
 //!
-//! // Named-topic bus
+//! ## Named-topic bus (requires `std` feature)
+//!
+//! ```
 //! let bus = photon_ring::Photon::<u64>::new(64);
 //! let mut p = bus.publisher("topic-a");
 //! let mut s = bus.subscribe("topic-a");
@@ -29,10 +35,16 @@
 //! assert_eq!(s.try_recv(), Ok(7));
 //! ```
 
+#![no_std]
+
+extern crate alloc;
+
+#[cfg(feature = "std")]
 mod bus;
 pub mod channel;
 pub(crate) mod ring;
 pub(crate) mod slot;
 
+#[cfg(feature = "std")]
 pub use bus::Photon;
 pub use channel::{channel, Publisher, Subscribable, Subscriber, TryRecvError};
