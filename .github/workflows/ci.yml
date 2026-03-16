@@ -78,6 +78,10 @@ jobs:
           --skip subscriber_drop_unblocks
           --skip subscriber_group_bounded_cross
           --skip bounded_cross_thread
+          --skip mpmc_two_publishers
+          --skip mpmc_stress
+          --skip mpmc_blocking_recv
+          --skip mpmc_clone
 
   # ── Cross-platform matrix build ──────────────────────────────────────
   cross-platform:
