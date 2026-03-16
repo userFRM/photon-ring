@@ -107,26 +107,26 @@ buffer carries its own **seqlock stamp** co-located with the payload:
 
 ## Benchmark Results
 
-### Benchmark Environment
+### Benchmark Machines
 
-- **CPU:** Intel Core i7-10700KF @ 3.80 GHz (8 cores / 16 threads)
-- **OS:** Linux 6.8.0-101-generic (Ubuntu)
-- **Rust:** 1.93.1 (stable), `--release` profile (opt-level 3)
-- **Turbo Boost:** enabled; **SMT:** enabled; **Core pinning:** none
-- **Framework:** Criterion, 100 samples, 3-second warmup
+| Machine | CPU | Cores | OS | Rust |
+|---|---|---|---|---|
+| **A** | Intel Core i7-10700KF @ 3.80 GHz | 8C / 16T | Linux 6.8 (Ubuntu) | 1.93.1 |
+| **B** | Apple M1 Pro | 8C | macOS 26.3 | 1.92.0 |
 
-Numbers are medians from the machine above. **Your results will vary** — run
-`cargo bench` on your own hardware for authoritative numbers.
+All runs: Criterion, 100 samples, 3-second warmup, `--release` (opt-level 3), no
+core pinning. Numbers are medians. **Your results will vary** — run `cargo bench`
+on your own hardware for authoritative numbers.
 
 ### Cross-Thread Latency (the metric that matters)
 
 Both libraries measured with publisher and consumer on separate OS threads, busy-spin
 wait strategy, ring size 4096. This is the apples-to-apples comparison.
 
-| Benchmark | Photon Ring | disruptor 4.0 |
-|---|---|---|
-| Cross-thread roundtrip | **98 ns** | 133 ns |
-| Publish only (write cost) | **3 ns** | 24 ns |
+| Benchmark | Photon Ring (A) | disruptor 4.0 (A) | Photon Ring (B) | disruptor 4.0 (B) |
+|---|---|---|---|---|
+| Cross-thread roundtrip | **98 ns** | 133 ns | **103 ns** | 174 ns |
+| Publish only (write cost) | **3 ns** | 24 ns | **2 ns** | 12 ns |
 
 Cross-thread latency is dominated by the CPU's cache coherence protocol (MESI/MOESI).
 Both libraries are close to the hardware floor. The publish-only difference reflects
@@ -134,26 +134,27 @@ Photon Ring's simpler write path (one seqlock stamp vs sequence claim + barrier)
 
 ### Photon Ring Detailed Benchmarks
 
-| Operation | Latency | Notes |
-|---|---|---|
-| `publish` (write only) | 3 ns | Single slot seqlock write |
-| `publish` + `try_recv` (1 sub, same thread) | 2.5 ns | Stamp-only fast path |
-| Fanout: 2 subscribers | 4 ns | |
-| Fanout: 5 subscribers | 8 ns | ~1.1 ns per additional sub |
-| Fanout: 10 subscribers | 14 ns | ~1.1 ns per additional sub |
-| `try_recv` (empty channel) | < 1 ns | Single atomic load |
-| Batch publish 64 + drain | 155 ns | 2.4 ns/msg amortized |
-| Struct roundtrip (24B payload) | 4.4 ns | Realistic payload size |
-| Cross-thread latency | 98 ns | Inter-core cache transfer |
+| Operation | A | B | Notes |
+|---|---|---|---|
+| `publish` (write only) | 3 ns | 2 ns | Single slot seqlock write |
+| `publish` + `try_recv` (1 sub, same thread) | 2.5 ns | 7 ns | Stamp-only fast path |
+| Fanout: 2 subscribers | 4 ns | 8 ns | |
+| Fanout: 5 subscribers | 8 ns | 12 ns | ~1.1 ns per additional sub |
+| Fanout: 10 subscribers | 14 ns | 23 ns | ~1.1 ns per additional sub |
+| `try_recv` (empty channel) | < 1 ns | < 1 ns | Single atomic load |
+| Batch publish 64 + drain | 155 ns | 206 ns | 2.4 ns/msg amortized |
+| Struct roundtrip (24B payload) | 4.4 ns | 8 ns | Realistic payload size |
+| Cross-thread latency | 98 ns | 103 ns | Inter-core cache transfer |
 
 ### Throughput
 
 The `market_data` example publishes 500,000 messages per topic across 4 independent
 SPMC topics (4 publishers, 4 subscribers):
 
-```
-2,000,000 messages in 12.5 ms = 160M msg/s
-```
+| Machine | Messages | Time | Throughput |
+|---|---|---|---|
+| **A** | 2,000,000 | 12.5 ms | 160M msg/s |
+| **B** | 2,000,000 | 26.44 ms | 75.6M msg/s |
 
 ## Soundness
 
@@ -291,8 +292,8 @@ prices_pub.publish(Quote { price: 150.0, volume: 100 });
 | | Photon Ring | disruptor-rs (v4) | bus (jonhoo) | crossbeam bounded |
 |---|---|---|---|---|
 | **Pattern** | SPMC seqlock ring | SP/MP sequence barriers | SPMC broadcast | MPMC bounded queue |
-| **Cross-thread latency** | 98 ns | 133 ns | — | — |
-| **Publish cost** | 3 ns | 24 ns | — | — |
+| **Cross-thread latency** | 98–103 ns | 133–174 ns | — | — |
+| **Publish cost** | 2–3 ns | 12–24 ns | — | — |
 | **Allocation** | None | None | None | None (bounded) |
 | **Consumer model** | Poll (`try_recv`) | Callback + Poller API | Poll | Poll |
 | **Overflow** | Lossy (Lagged) | Backpressure (blocks) | Backpressure | Backpressure |
