@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/photon-ring.svg)](https://crates.io/crates/photon-ring)
 [![docs.rs](https://docs.rs/photon-ring/badge.svg)](https://docs.rs/photon-ring)
-[![License](https://img.shields.io/crates/l/photon-ring.svg)](LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
 [![no_std](https://img.shields.io/badge/no__std-compatible-brightgreen.svg)](https://docs.rs/photon-ring)
 
 **Ultra-low-latency SPMC inter-thread messaging using seqlock-stamped ring buffers.**
@@ -396,5 +396,4 @@ cargo +nightly miri test --test correctness -- --test-threads=1
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
-[MIT License](LICENSE-MIT) at your option.
+Licensed under the [Apache License, Version 2.0](LICENSE-APACHE).

@@ -137,4 +137,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Criterion benchmarks with `disruptor` v4.0.0 comparison
 - Market data example (4-topic fan-out, ~160M msg/s)
 - SPDX license headers on all source files
-- Dual license: MIT OR Apache-2.0
+- License: Apache-2.0
