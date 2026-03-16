@@ -138,9 +138,9 @@ Photon Ring's simpler write path (one seqlock stamp vs sequence claim + barrier)
 |---|---|---|
 | `publish` (write only) | 3 ns | Single slot seqlock write |
 | `publish` + `try_recv` (1 sub, same thread) | 2.5 ns | Stamp-only fast path |
-| Fanout: 2 subscribers | 4 ns | ~1.1 ns per additional sub |
-| Fanout: 5 subscribers | 8 ns | Linear scaling |
-| Fanout: 10 subscribers | 14 ns | Linear scaling |
+| Fanout: 2 subscribers | 4 ns | |
+| Fanout: 5 subscribers | 8 ns | ~1.1 ns per additional sub |
+| Fanout: 10 subscribers | 14 ns | ~1.1 ns per additional sub |
 | `try_recv` (empty channel) | < 1 ns | Single atomic load |
 | Batch publish 64 + drain | 155 ns | 2.4 ns/msg amortized |
 | Struct roundtrip (24B payload) | 4.4 ns | Realistic payload size |
