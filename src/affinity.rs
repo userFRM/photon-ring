@@ -3,18 +3,16 @@
 
 //! CPU core affinity helpers for deterministic cross-core latency.
 //!
-//! `no_std` compatible via the [`core_affinity2`] crate.
-//!
-//! In HFT and other latency-sensitive workloads, pinning publisher and
-//! subscriber threads to specific CPU cores eliminates OS scheduler jitter
-//! and ensures consistent cache-coherence transfer times.
+//! Pinning publisher and subscriber threads to specific CPU cores
+//! eliminates OS scheduler jitter and ensures consistent cache-coherence
+//! transfer times.
 //!
 //! ## NUMA considerations
 //!
-//! On multi-socket systems, always pin publisher and subscriber threads to
-//! cores on the **same** socket. Cross-socket communication (QPI/UPI) adds
-//! ~100-200 ns of additional latency per cache-line transfer compared to
-//! intra-socket L3 ring-bus snoops (~40-55 ns on Intel Comet Lake).
+//! On multi-socket systems, pin publisher and subscriber threads to
+//! cores on the **same** socket. Cross-socket communication (QPI/UPI)
+//! adds ~100-200 ns of additional latency per cache-line transfer
+//! compared to intra-socket L3 snoops (~40-55 ns on Intel Comet Lake).
 //!
 //! ## Example
 //!
@@ -27,12 +25,6 @@
 //! // Pin to the first core
 //! assert!(affinity::pin_to_core(cores[0]));
 //! ```
-//!
-//! ## Feature gate
-//!
-//! This module is only available when the `affinity` feature is enabled
-//! (on by default). Disable with `--no-default-features` for builds
-//! without affinity support.
 
 use alloc::vec::Vec;
 

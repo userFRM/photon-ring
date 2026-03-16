@@ -8,7 +8,7 @@
 //!
 //! | Strategy | Latency | CPU usage | Best for |
 //! |---|---|---|---|
-//! | `BusySpin` | Lowest (~0 ns wakeup) | 100% core | HFT, dedicated cores |
+//! | `BusySpin` | Lowest (~0 ns wakeup) | 100% core | Dedicated, pinned cores |
 //! | `YieldSpin` | Low (~30 ns on x86) | High | Shared cores, SMT |
 //! | `BackoffSpin` | Medium (exponential) | Decreasing | Background consumers |
 //! | `Adaptive` | Auto-scaling | Varies | General purpose |
@@ -19,7 +19,7 @@
 ///
 /// | Strategy | Latency | CPU usage | Best for |
 /// |---|---|---|---|
-/// | `BusySpin` | Lowest (~0 ns wakeup) | 100% core | HFT, dedicated cores |
+/// | `BusySpin` | Lowest (~0 ns wakeup) | 100% core | Dedicated, pinned cores |
 /// | `YieldSpin` | Low (~30 ns on x86) | High | Shared cores, SMT |
 /// | `BackoffSpin` | Medium (exponential) | Decreasing | Background consumers |
 /// | `Adaptive` | Auto-scaling | Varies | General purpose |

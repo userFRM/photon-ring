@@ -1,7 +1,7 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! HFT-grade memory control for ring buffer allocation.
+//! Platform-specific memory control for ring buffer allocation.
 //!
 //! Provides huge-page-backed allocation via `mmap`, `mlock` for page-fault
 //! prevention, and pre-faulting for deterministic first-access latency.
