@@ -115,15 +115,15 @@ impl<T: Copy> Publisher<T> {
         Ok(())
     }
 
-    /// Publish a batch of values with a single cursor update.
+    /// Publish a batch of values.
     ///
-    /// Each slot is written atomically (seqlock), but the cursor advances only
-    /// once at the end — consumers see the entire batch appear at once, and
+    /// On a **lossy** channel: writes all values with a single cursor update
+    /// at the end — consumers see the entire batch appear at once, and
     /// cache-line bouncing on the shared cursor is reduced to one store.
     ///
-    /// On a bounded channel, this spin-waits for room before publishing each
-    /// value, ensuring no message loss. Values are still committed with a
-    /// single cursor update at the end.
+    /// On a **bounded** channel: spin-waits for room before each value,
+    /// ensuring no message loss. The cursor advances per-value (not batched),
+    /// so consumers may observe a partial batch during publication.
     #[inline]
     pub fn publish_batch(&mut self, values: &[T]) {
         if values.is_empty() {
@@ -332,6 +332,7 @@ impl<T: Copy> Subscriber<T> {
                 Ok(Some(value)) => {
                     self.cursor += 1;
                     self.update_tracker();
+                    self.total_received += 1;
                     return value;
                 }
                 Ok(None) => {}
@@ -348,6 +349,7 @@ impl<T: Copy> Subscriber<T> {
                 Ok(Some(value)) => {
                     self.cursor += 1;
                     self.update_tracker();
+                    self.total_received += 1;
                     return value;
                 }
                 Ok(None) => core::hint::spin_loop(),
