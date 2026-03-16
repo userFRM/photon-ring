@@ -9,7 +9,7 @@
 **Ultra-low-latency SPMC/MPMC pub/sub using seqlock-stamped ring buffers.**
 
 Photon Ring is a pub/sub messaging library for Rust that achieves ~95 ns
-cross-thread roundtrip latency (48 ns one-way), 381M msg/s throughput, with
+cross-thread roundtrip latency (48 ns one-way), ~300M msg/s throughput, with
 zero allocation on the hot path. `no_std` compatible.
 
 ```rust
@@ -153,8 +153,11 @@ SPMC topics (4 publishers, 4 subscribers):
 
 | Machine | Throughput |
 |---|---|
-| **A** (Intel i7-10700KF) | 2,000,000 msgs in 5.2 ms = **381M msg/s** |
-| **B** (Apple M1 Pro) | 2,000,000 msgs in 40.5 ms = 49.4M msg/s |
+| **A** (Intel i7-10700KF) | **~300M msg/s** (range: 200-389M) |
+| **B** (Apple M1 Pro) | **~88M msg/s** (range: 50-106M) |
+
+Throughput varies significantly with OS thread scheduling, especially on
+Apple Silicon's heterogeneous P/E core architecture without core pinning.
 
 ### Payload Scaling
 
@@ -169,7 +172,7 @@ full analysis and chart.
 | **Pattern** | SPMC/MPMC broadcast | SP/MP sequence barriers | MPMC queue | SPMC broadcast |
 | **Publish cost** | 2.8 ns (SPMC) / 12.1 ns (MPMC) | 30.6 ns | -- | -- |
 | **Cross-thread** | 95 ns | 138 ns | -- | -- |
-| **Throughput** | 381M msg/s | -- | -- | -- |
+| **Throughput** | ~300M msg/s | -- | -- | -- |
 | **Topology builder** | `Pipeline::builder().then()` | `handleEventsWith().then()` | No | No |
 | **Batch APIs** | `recv_batch`, `drain`, `publish_batch` | Batch publishing | Iterator drain | No |
 | **Named-topic bus** | `Photon<T>`, `TypedBus` | No | No | No |
