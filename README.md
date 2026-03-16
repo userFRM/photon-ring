@@ -376,6 +376,20 @@ cargo test
 cargo +nightly miri test --test correctness -- --test-threads=1
 ```
 
+## Platform Support
+
+| Platform | Core ring | Affinity | Hugepages | Notes |
+|---|---|---|---|---|
+| x86_64 Linux | Yes | Yes | Yes | Full support |
+| x86_64 macOS | Yes | Yes | No | |
+| x86_64 Windows | Yes | Yes | No | |
+| aarch64 Linux | Yes | Yes | Yes | |
+| aarch64 macOS (Apple Silicon) | Yes | Yes | No | M1/M2/M3/M4 |
+| wasm32 | Yes | No | No | Core channel only |
+| FreeBSD / NetBSD | Yes | Yes | No | |
+| Android | Yes | Yes | No | |
+| 32-bit ARM (Cortex-M) | No | No | No | Requires AtomicU64 |
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or

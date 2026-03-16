@@ -1,6 +1,6 @@
 [package]
 name = "photon-ring"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."
 license = "MIT OR Apache-2.0"

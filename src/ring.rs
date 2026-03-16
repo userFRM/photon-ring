@@ -14,7 +14,6 @@ pub(crate) struct Padded<T>(pub(crate) T);
 
 /// Backpressure state attached to a [`SharedRing`] when created via
 /// [`channel_bounded`](crate::channel::channel_bounded).
-#[allow(dead_code)]
 pub(crate) struct BackpressureState {
     /// How many slots of headroom to leave between the publisher and the
     /// slowest subscriber.
@@ -34,7 +33,6 @@ pub(crate) struct SharedRing<T> {
     pub(crate) mask: u64,
     pub(crate) cursor: Padded<AtomicU64>,
     /// Present only for bounded (backpressure-capable) channels.
-    #[allow(dead_code)]
     pub(crate) backpressure: Option<BackpressureState>,
 }
 
@@ -56,7 +54,6 @@ impl<T: Copy> SharedRing<T> {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn new_bounded(capacity: usize, watermark: usize) -> Self {
         assert!(
             capacity.is_power_of_two(),
@@ -84,14 +81,14 @@ impl<T: Copy> SharedRing<T> {
     }
 
     /// Raw pointer to the start of the slot array.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // used only with `hugepages` feature
     #[inline]
     pub(crate) fn slots_ptr(&self) -> *const Slot<T> {
         self.slots.as_ptr()
     }
 
     /// Total byte length of the slot array.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // used only with `hugepages` feature
     #[inline]
     pub(crate) fn slots_byte_len(&self) -> usize {
         self.slots.len() * core::mem::size_of::<Slot<T>>()
@@ -104,7 +101,6 @@ impl<T: Copy> SharedRing<T> {
 
     /// Register a new subscriber tracker and return it.
     /// Only meaningful when backpressure is enabled; returns `None` otherwise.
-    #[allow(dead_code)]
     pub(crate) fn register_tracker(&self, initial: u64) -> Option<Arc<Padded<AtomicU64>>> {
         let bp = self.backpressure.as_ref()?;
         let tracker = Arc::new(Padded(AtomicU64::new(initial)));
@@ -114,7 +110,6 @@ impl<T: Copy> SharedRing<T> {
 
     /// Scan all subscriber trackers and return the minimum cursor.
     /// Returns `None` if there are no subscribers.
-    #[allow(dead_code)]
     #[inline]
     pub(crate) fn slowest_cursor(&self) -> Option<u64> {
         let bp = self.backpressure.as_ref()?;
