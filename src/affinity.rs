@@ -3,6 +3,8 @@
 
 //! CPU core affinity helpers for deterministic cross-core latency.
 //!
+//! `no_std` compatible via the [`core_affinity2`] crate.
+//!
 //! In HFT and other latency-sensitive workloads, pinning publisher and
 //! subscriber threads to specific CPU cores eliminates OS scheduler jitter
 //! and ensures consistent cache-coherence transfer times.
@@ -19,52 +21,40 @@
 //! ```no_run
 //! use photon_ring::affinity;
 //!
-//! // Pin publisher to core 0, subscriber to core 1.
 //! let cores = affinity::available_cores();
 //! assert!(cores.len() >= 2, "need at least 2 cores");
 //!
-//! let pub_core = cores[0];
-//! let sub_core = cores[1];
-//!
-//! std::thread::spawn(move || {
-//!     affinity::pin_to_core(pub_core);
-//!     // ... publisher loop ...
-//! });
-//! std::thread::spawn(move || {
-//!     affinity::pin_to_core(sub_core);
-//!     // ... subscriber loop ...
-//! });
+//! // Pin to the first core
+//! assert!(affinity::pin_to_core(cores[0]));
 //! ```
 //!
 //! ## Feature gate
 //!
 //! This module is only available when the `affinity` feature is enabled
-//! (on by default). Disable with `--no-default-features` for pure `no_std`
-//! builds.
+//! (on by default). Disable with `--no-default-features` for builds
+//! without affinity support.
 
 use alloc::vec::Vec;
 
-pub use core_affinity::CoreId;
+pub use core_affinity2::CoreId;
 
 /// Pin the current thread to a specific CPU core.
 ///
-/// Call this at the start of your publisher or subscriber thread for
-/// deterministic cross-core latency. Returns `true` if the affinity was
-/// set successfully, `false` if the OS rejected the request (e.g.,
-/// invalid core ID or insufficient permissions).
+/// Returns `true` on success, `false` if the OS rejected the request
+/// (e.g., invalid core ID, insufficient permissions, or unsupported
+/// platform).
 ///
 /// # Example
 ///
 /// ```no_run
-/// use photon_ring::affinity::{self, CoreId};
+/// use photon_ring::affinity;
 ///
-/// // Pin to core 2.
-/// let ok = affinity::pin_to_core(CoreId { id: 2 });
-/// assert!(ok, "failed to pin to core 2");
+/// let cores = affinity::available_cores();
+/// assert!(affinity::pin_to_core(cores[0]), "failed to pin");
 /// ```
 #[inline]
 pub fn pin_to_core(core_id: CoreId) -> bool {
-    core_affinity::set_for_current(core_id)
+    core_id.set_affinity().is_ok()
 }
 
 /// Return the list of CPU cores available to this process.
@@ -72,13 +62,8 @@ pub fn pin_to_core(core_id: CoreId) -> bool {
 /// The returned [`CoreId`]s can be passed directly to [`pin_to_core`].
 /// The list order matches the OS core numbering (logical CPUs including
 /// SMT siblings).
-///
-/// # Panics
-///
-/// Panics if the OS fails to enumerate cores (should not happen on
-/// Linux, macOS, or Windows).
 pub fn available_cores() -> Vec<CoreId> {
-    core_affinity::get_core_ids().expect("failed to enumerate CPU cores")
+    core_affinity2::get_core_ids().unwrap_or_default()
 }
 
 /// Pin the current thread to a core by its numeric index.
@@ -92,7 +77,7 @@ pub fn available_cores() -> Vec<CoreId> {
 /// ```no_run
 /// use photon_ring::affinity;
 ///
-/// affinity::pin_to_core_id(0); // pin to the first available core
+/// assert!(affinity::pin_to_core_id(0), "failed to pin to core 0");
 /// ```
 pub fn pin_to_core_id(index: usize) -> bool {
     let cores = available_cores();
@@ -103,9 +88,6 @@ pub fn pin_to_core_id(index: usize) -> bool {
 }
 
 /// Return the number of CPU cores available to this process.
-///
-/// This is equivalent to `available_cores().len()` but avoids allocating
-/// the full `Vec` if you only need the count.
 pub fn core_count() -> usize {
     available_cores().len()
 }

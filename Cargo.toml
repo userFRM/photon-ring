@@ -14,12 +14,12 @@ documentation = "https://docs.rs/photon-ring"
 [features]
 default = ["std", "affinity"]
 std = []
-affinity = ["std", "dep:core_affinity"]
+affinity = ["dep:core_affinity2"]
 
 [dependencies]
 hashbrown = "0.16.1"
 spin = "0.10.0"
-core_affinity = { version = "0.8", optional = true }
+core_affinity2 = { version = "0.15", optional = true }
 
 [dev-dependencies]
 criterion = "0.8.2"
