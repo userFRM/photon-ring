@@ -31,54 +31,26 @@ assert_eq!(prices_sub.try_recv(), Ok(101));
 
 ## Architecture
 
-### SPMC
-
 ```mermaid
 flowchart LR
-    P[Publisher] --> RB[(Ring buffer)]
-    RB --> S1[Subscriber 1]
-    RB --> S2[Subscriber 2]
-    RB --> S3[Subscriber 3]
-    RB --> SN[Subscriber N]
-```
-
-### MPMC
-
-```mermaid
-flowchart LR
-    P1[Publisher 1] --> RB[(Ring buffer)]
-    P2[Publisher 2] --> RB
-    PN[Publisher N] --> RB
-    RB --> S1[Subscriber 1]
-    RB --> S2[Subscriber 2]
-    RB --> SN[Subscriber N]
-```
-
-### Pipeline
-
-```mermaid
-flowchart LR
-    IN[Input publisher] --> R1[(Ring 1)]
-    R1 --> ST1[Stage 1]
-    ST1 --> R2[(Ring 2)]
-    R2 --> ST2[Stage 2]
-    ST2 --> R3[(Ring 3)]
-    R3 --> ST3[Stage 3]
-    ST3 --> OUT[Output subscriber]
-```
-
-### Slot Layout
-
-```mermaid
-flowchart LR
-    subgraph CL["64-byte cache line"]
-        ST["stamp: AtomicU64 (8 B)"]
-        VAL["value: T (up to 56 B stays co-located)"]
+    subgraph SPMC
+        P[Publisher] --> R[(Ring)]
+        R --> S1[Sub 1]
+        R --> S2[Sub 2]
+        R --> SN[Sub N]
     end
-    VAL -. larger payloads spill .-> EXTRA["additional cache lines"]
+    subgraph MPMC
+        P1[Pub 1] --> R2[(Ring)]
+        P2[Pub 2] --> R2
+        R2 --> C1[Sub 1]
+        R2 --> C2[Sub N]
+    end
+    subgraph Pipeline
+        IN[Input] --> R3[(Ring)] --> ST1[Stage] --> R4[(Ring)] --> OUT[Output]
+    end
 ```
 
-For payloads up to 56 bytes, the stamp and value share the same cache line, so the consumer can validate availability and read the payload from one line.
+Each ring slot is a 64-byte cache-line-aligned struct: an 8-byte `AtomicU64` seqlock stamp followed by the payload. For `T` up to 56 bytes, stamp and value share one cache line — the consumer validates and reads in a single transfer.
 
 ## Public Types
 
