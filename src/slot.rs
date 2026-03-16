@@ -38,6 +38,13 @@ impl<T> Slot<T> {
             value: UnsafeCell::new(MaybeUninit::uninit()),
         }
     }
+
+    /// Load the stamp with Acquire ordering. Used by MPMC catch-up to
+    /// check whether a successor slot has been committed.
+    #[inline]
+    pub(crate) fn stamp_load(&self) -> u64 {
+        self.stamp.load(Ordering::Acquire)
+    }
 }
 
 impl<T: Copy> Slot<T> {
