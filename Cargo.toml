@@ -1,0 +1,18 @@
+[package]
+name = "photon"
+version = "0.1.0"
+edition = "2021"
+description = "Ultra-low-latency SPMC pub/sub — the seqlock ring that makes Disruptor look slow"
+license = "MIT OR Apache-2.0"
+keywords = ["pubsub", "spmc", "seqlock", "low-latency", "zero-alloc"]
+categories = ["concurrency"]
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[example]]
+name = "market_data"
+
+[[bench]]
+name = "throughput"
+harness = false

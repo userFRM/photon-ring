@@ -1,0 +1,87 @@
+use std::cell::UnsafeCell;
+use std::mem::MaybeUninit;
+use std::ptr;
+use std::sync::atomic::{fence, AtomicU64, Ordering};
+
+/// A cache-line-aligned slot holding a seqlock stamp and a payload.
+///
+/// The stamp co-locates with the value in the same cache line (for T ≤ 56 bytes),
+/// eliminating an extra cache miss on reads. The encoding:
+///
+/// - `stamp = seq * 2 + 1` — write in progress for sequence `seq`
+/// - `stamp = seq * 2 + 2` — write complete for sequence `seq`
+/// - `stamp = 0`           — never written
+#[repr(C, align(64))]
+pub(crate) struct Slot<T> {
+    stamp: AtomicU64,
+    value: UnsafeCell<MaybeUninit<T>>,
+}
+
+// Safety: Access is coordinated by the seqlock protocol.
+// Only one writer (Publisher) writes to a slot at a time.
+// Readers (Subscribers) use the stamp to detect torn reads.
+unsafe impl<T: Send> Sync for Slot<T> {}
+unsafe impl<T: Send> Send for Slot<T> {}
+
+impl<T> Slot<T> {
+    pub(crate) fn new() -> Self {
+        Slot {
+            stamp: AtomicU64::new(0),
+            value: UnsafeCell::new(MaybeUninit::uninit()),
+        }
+    }
+}
+
+impl<T: Copy> Slot<T> {
+    /// Seqlock write protocol. Single-writer only.
+    ///
+    /// 1. Store odd stamp (writing)
+    /// 2. Release fence — odd stamp visible before data write
+    /// 3. Write value
+    /// 4. Release store of even stamp — data visible before done stamp
+    #[inline]
+    pub(crate) fn write(&self, seq: u64, value: T) {
+        let writing = seq * 2 + 1;
+        let done = seq * 2 + 2;
+
+        self.stamp.store(writing, Ordering::Relaxed);
+        fence(Ordering::Release);
+
+        unsafe { ptr::write(self.value.get() as *mut T, value) };
+
+        self.stamp.store(done, Ordering::Release);
+    }
+
+    /// Seqlock read protocol. Returns `None` on torn read (caller should retry).
+    ///
+    /// Returns `Err(actual_stamp)` if the slot holds a different sequence.
+    #[inline]
+    pub(crate) fn try_read(&self, seq: u64) -> Result<Option<T>, u64> {
+        let expected = seq * 2 + 2;
+
+        let s1 = self.stamp.load(Ordering::Acquire);
+
+        // Write in progress — caller should spin
+        if s1 & 1 != 0 {
+            return Ok(None);
+        }
+
+        // Wrong sequence (not written yet, or overwritten by a later sequence)
+        if s1 != expected {
+            return Err(s1);
+        }
+
+        // Stamp matches — read the value
+        let value = unsafe { ptr::read((*self.value.get()).as_ptr()) };
+
+        // Verify no torn read
+        fence(Ordering::Acquire);
+        let s2 = self.stamp.load(Ordering::Relaxed);
+
+        if s1 == s2 {
+            Ok(Some(value))
+        } else {
+            Ok(None) // torn read, retry
+        }
+    }
+}
