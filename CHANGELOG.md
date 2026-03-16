@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-03-16
+
+### Added
+- **`SubscriberGroup<T, N>`:** Const-generic batched multi-consumer type that reads
+  the ring once and sweeps all `N` cursor increments in a compiler-unrolled loop.
+  Reduces per-subscriber fanout cost from ~1.1 ns to ~0.2 ns (5.5x slope reduction).
+  API: `Subscribable::subscribe_group::<N>()`, with `try_recv()`, `recv()`,
+  `pending()`, and `aligned_count()` methods.
+- **Two-phase spin in `recv()`:** 64 bare-spin iterations (zero wakeup latency),
+  then `PAUSE`-based spin (power efficient). On Skylake+, `PAUSE` adds ~140 cycles
+  per iteration — the bare-spin phase avoids this when the message arrives quickly.
+- **RDTSC one-way latency benchmark** (`benches/rdtsc_oneway.rs`, x86_64 only):
+  Embeds TSC timestamps in message payload, measures true publisher-to-consumer
+  latency without signal-back overhead. Confirmed p50 = 48 ns one-way on i7-10700KF.
+
+### Performance
+- SubscriberGroup fanout 10 subs: **4.3 ns** (vs 13.3 ns independent = 3.1x faster)
+- Fanout slope: **0.2 ns/sub** (vs 1.1 ns/sub = 5.5x improvement)
+- One-way latency (RDTSC): **48 ns p50**, 34 ns min, 66 ns p99
+- Cross-thread roundtrip: **96 ns** (confirmed = 2 × ~48 ns cache line transfers)
+
 ## [0.2.0] - 2026-03-16
 
 ### Changed
