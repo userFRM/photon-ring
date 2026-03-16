@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-03-16
+
+### Fixed (Codex-reported critical issues)
+- **`publish()` now enforces backpressure** on bounded channels. Previously only
+  `try_publish()` checked — `publish()` and `publish_batch()` bypassed it silently.
+  Now `publish()` spin-waits for room on bounded channels.
+- **Subscriber Drop deregisters backpressure tracker.** Dropping a subscriber on a
+  bounded channel no longer leaves a stale cursor that blocks the publisher forever.
+- **`SubscriberGroup` participates in backpressure.** Groups now register a tracker
+  and update it with the minimum cursor on each `try_recv()`.
+- **`prefault()` is now `unsafe`** with documented precondition (must be called before
+  any publish/subscribe operations).
+- **`subscribe_group::<0>()` now panics** with a clear message instead of silently
+  breaking.
+
+### Changed
+- Stale README test counts updated (40 integration + 12 unit + 10 doc-tests = 70).
+- Removed invalid `--features affinity` references (no longer a feature gate).
+- Fixed `affinity::pin_to_core(0)` → `affinity::pin_to_core_id(0)` in README.
+- Added `rust-version = "1.70"`, `docs.rs` metadata, `exclude = [".github/"]`.
+
+## [0.5.1] - 2026-03-16
+
+### Added
+- **GitHub Actions CI** (`.github/workflows/ci.yml`): 9 jobs covering check,
+  test, clippy, fmt, miri, cross-platform (Linux/macOS/Windows), wasm32,
+  no-default-features, and hugepages feature gate.
+- **Platform support matrix** in README (x86_64, aarch64, wasm32, Cortex-M).
+
+### Changed
+- Removed unnecessary `#[allow(dead_code)]` annotations from `ring.rs`.
+- All docstrings verified objective (no domain-specific jargon).
+- All 11 `.rs` source files have SPDX license headers.
+
 ## [0.5.0] - 2026-03-16
 
 ### Added
@@ -98,8 +132,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lag detection via `TryRecvError::Lagged { skipped }` with head-cursor-based computation
 - Named-topic bus: `Photon<T>` with `publisher()`, `subscribe()`, `subscribable()`
 - Full `no_std` support (requires `alloc`) using `hashbrown` and `spin`
-- 26 correctness tests including cross-thread SPMC and 1M-message stress test
-- MIRI verification (22 single-threaded tests)
+- 40 integration tests including cross-thread SPMC and 1M-message stress test
+- MIRI verification (single-threaded tests)
 - Criterion benchmarks with `disruptor` v4.0.0 comparison
 - Market data example (4-topic fan-out, ~160M msg/s)
 - SPDX license headers on all source files

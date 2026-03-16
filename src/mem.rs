@@ -75,10 +75,13 @@ mod tests {
     #[test]
     fn test_prefault() {
         let (mut pub_, subs) = channel::<u64>(64);
-        let mut sub = subs.subscribe();
 
-        // Prefault the ring via the publisher.
-        pub_.prefault();
+        // SAFETY: Called before any publish/subscribe operations begin.
+        unsafe {
+            pub_.prefault();
+        }
+
+        let mut sub = subs.subscribe();
 
         // The ring should still work correctly after prefaulting.
         pub_.publish(42);

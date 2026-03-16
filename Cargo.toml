@@ -1,7 +1,8 @@
 [package]
 name = "photon-ring"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
+rust-version = "1.70"
 description = "Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."
 license = "MIT OR Apache-2.0"
 keywords = ["pubsub", "spmc", "seqlock", "no_std", "zero-alloc"]
@@ -10,6 +11,7 @@ readme = "README.md"
 repository = "https://github.com/userFRM/photon-ring"
 homepage = "https://github.com/userFRM/photon-ring"
 documentation = "https://docs.rs/photon-ring"
+exclude = [".github/"]
 
 [features]
 hugepages = ["dep:libc"]
@@ -42,3 +44,8 @@ harness = false
 [[bench]]
 name = "rdtsc_oneway"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]

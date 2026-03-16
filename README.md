@@ -160,14 +160,16 @@ SPMC topics (4 publishers, 4 subscribers):
 
 ### Test Suite
 
-- **26 correctness tests** covering basic pub/sub, multi-subscriber fanout, ring overflow
-  with lag detection, `latest()` under contention, batch publish, cross-thread SPMC,
-  and a 1M-message stress test verified across 5 consecutive runs.
-- **3 doc-tests** verifying all README-facing code examples compile and run.
+- **58 correctness tests** (40 integration + 18 unit) covering basic pub/sub,
+  multi-subscriber fanout, ring overflow with lag detection, `latest()` under
+  contention, batch publish, cross-thread SPMC, bounded backpressure, core
+  affinity, wait strategies, memory control, observability counters, and a
+  1M-message stress test.
+- **10 doc-tests** verifying all code examples compile and run.
 
 ### MIRI Verification
 
-22 single-threaded tests pass under [Miri](https://github.com/rust-lang/miri) with no
+Single-threaded tests pass under [Miri](https://github.com/rust-lang/miri) with no
 undefined behavior detected. Multi-threaded tests are excluded because Miri's thread
 scheduling is non-deterministic and the tests contain spin loops.
 
@@ -282,16 +284,18 @@ match pub_.try_publish(42u64) {
 }
 ```
 
-### Core Affinity (feature: `affinity`, default on)
+### Core Affinity
 
-Pin threads to specific CPU cores for deterministic cache coherence latency:
+Pin threads to specific CPU cores for deterministic cache coherence latency.
+Available automatically on Linux, macOS, Windows, FreeBSD, NetBSD, and Android
+(via `core_affinity2` dependency).
 
 ```rust,no_run
 use photon_ring::affinity;
 
 let cores = affinity::available_cores();
 // Pin publisher to core 0, subscriber to core 1
-affinity::pin_to_core(0);
+affinity::pin_to_core_id(0);
 ```
 
 ### SubscriberGroup (batched fanout)

@@ -94,7 +94,7 @@ fn main() {
             order_id: published,
             price: 100.0 + (published as f64) * 0.01,
             quantity: 100 + (published % 500) as u32,
-            side: if published.is_multiple_of(2) {
+            side: if published % 2 == 0 {
                 Side::Buy
             } else {
                 Side::Sell

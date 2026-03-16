@@ -11,7 +11,7 @@
 //! Uses a bounded channel so the publisher cannot outrun the subscriber,
 //! ensuring every message is received and measured.
 //!
-//! Run with: cargo run --release --example pinned_latency --features affinity
+//! Run with: cargo run --release --example pinned_latency
 
 use photon_ring::affinity;
 use photon_ring::{channel_bounded, PublishError, WaitStrategy};

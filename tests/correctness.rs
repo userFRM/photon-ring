@@ -796,3 +796,235 @@ fn publisher_sequence() {
     // sequence() == published()
     assert_eq!(p.sequence(), p.published());
 }
+
+// -------------------------------------------------------------------------
+// Bug fix: publish() respects backpressure on bounded channels
+// -------------------------------------------------------------------------
+
+#[test]
+fn bounded_publish_blocks_until_consumer_catches_up() {
+    // publish() (not just try_publish) must respect backpressure.
+    let (mut p, s) = channel_bounded::<u64>(4, 0);
+    let mut sub = s.subscribe();
+    let n = 100u64;
+
+    let writer = std::thread::spawn(move || {
+        for i in 0..n {
+            // Uses publish() — must block when ring is full.
+            p.publish(i);
+        }
+    });
+
+    let reader = std::thread::spawn(move || {
+        for expected in 0..n {
+            loop {
+                match sub.try_recv() {
+                    Ok(v) => {
+                        assert_eq!(
+                            v, expected,
+                            "bounded publish() corruption at seq {expected}"
+                        );
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => core::hint::spin_loop(),
+                    Err(TryRecvError::Lagged { .. }) => {
+                        panic!("bounded channel publish() should never cause lag");
+                    }
+                }
+            }
+        }
+    });
+
+    writer.join().unwrap();
+    reader.join().unwrap();
+}
+
+#[test]
+fn bounded_publish_batch_blocks_until_consumer_catches_up() {
+    // publish_batch() must also respect backpressure.
+    let (mut p, s) = channel_bounded::<u64>(4, 0);
+    let mut sub = s.subscribe();
+
+    let writer = std::thread::spawn(move || {
+        // Publish 10 batches of 4 values each through a 4-slot ring.
+        for batch in 0..10u64 {
+            let values: Vec<u64> = (batch * 4..batch * 4 + 4).collect();
+            p.publish_batch(&values);
+        }
+    });
+
+    let reader = std::thread::spawn(move || {
+        for expected in 0..40u64 {
+            loop {
+                match sub.try_recv() {
+                    Ok(v) => {
+                        assert_eq!(
+                            v, expected,
+                            "bounded publish_batch() corruption at seq {expected}"
+                        );
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => core::hint::spin_loop(),
+                    Err(TryRecvError::Lagged { .. }) => {
+                        panic!("bounded channel publish_batch() should never cause lag");
+                    }
+                }
+            }
+        }
+    });
+
+    writer.join().unwrap();
+    reader.join().unwrap();
+}
+
+// -------------------------------------------------------------------------
+// Bug fix: Subscriber drop releases backpressure tracker
+// -------------------------------------------------------------------------
+
+#[test]
+fn subscriber_drop_releases_backpressure() {
+    let (mut p, s) = channel_bounded::<u64>(4, 0);
+
+    // Create a subscriber that will be the only tracker.
+    let sub = s.subscribe();
+
+    // Fill the ring.
+    for i in 0..4 {
+        p.try_publish(i).unwrap();
+    }
+
+    // Ring is full — publisher can't publish.
+    assert_eq!(p.try_publish(99), Err(PublishError::Full(99)));
+
+    // Drop the subscriber — its tracker should be deregistered.
+    drop(sub);
+
+    // Now the publisher should be able to publish freely (no trackers = unbounded).
+    p.try_publish(99).unwrap();
+    p.try_publish(100).unwrap();
+}
+
+#[test]
+fn subscriber_drop_unblocks_other_subscribers() {
+    let (mut p, s) = channel_bounded::<u64>(4, 0);
+    let slow = s.subscribe(); // slow reader, will be dropped
+    let mut fast = s.subscribe();
+
+    // Fill the ring.
+    for i in 0..4 {
+        p.try_publish(i).unwrap();
+    }
+
+    // Both trackers exist — slowest (slow) blocks the publisher.
+    assert_eq!(p.try_publish(99), Err(PublishError::Full(99)));
+
+    // Fast reader catches up.
+    for _ in 0..4 {
+        fast.try_recv().unwrap();
+    }
+
+    // Still blocked because slow reader hasn't read anything.
+    assert_eq!(p.try_publish(99), Err(PublishError::Full(99)));
+
+    // Drop the slow reader — removes its tracker.
+    drop(slow);
+
+    // Now the publisher is gated only by the fast reader.
+    p.try_publish(99).unwrap();
+}
+
+// -------------------------------------------------------------------------
+// Bug fix: SubscriberGroup participates in backpressure
+// -------------------------------------------------------------------------
+
+#[test]
+fn subscriber_group_bounded_channel_basic() {
+    let (mut p, s) = channel_bounded::<u64>(4, 0);
+    let mut group = s.subscribe_group::<2>();
+
+    // Publish and receive normally.
+    for i in 0..4 {
+        p.try_publish(i).unwrap();
+    }
+
+    // Ring is full — group tracker should block the publisher.
+    assert_eq!(p.try_publish(99), Err(PublishError::Full(99)));
+
+    // Drain one — frees one slot.
+    assert_eq!(group.try_recv(), Ok(0));
+    p.try_publish(99).unwrap();
+
+    // Drain the rest.
+    assert_eq!(group.try_recv(), Ok(1));
+    assert_eq!(group.try_recv(), Ok(2));
+    assert_eq!(group.try_recv(), Ok(3));
+    assert_eq!(group.try_recv(), Ok(99));
+    assert_eq!(group.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[test]
+fn subscriber_group_drop_releases_backpressure() {
+    let (mut p, s) = channel_bounded::<u64>(4, 0);
+    let group = s.subscribe_group::<2>();
+
+    // Fill the ring.
+    for i in 0..4 {
+        p.try_publish(i).unwrap();
+    }
+
+    // Group tracker should block.
+    assert_eq!(p.try_publish(99), Err(PublishError::Full(99)));
+
+    // Drop the group — tracker should be deregistered.
+    drop(group);
+
+    // Publisher should be free now.
+    p.try_publish(99).unwrap();
+}
+
+#[test]
+fn subscriber_group_bounded_cross_thread() {
+    let (mut p, s) = channel_bounded::<u64>(64, 0);
+    let mut group = s.subscribe_group::<3>();
+    let n = 10_000u64;
+
+    let writer = std::thread::spawn(move || {
+        for i in 0..n {
+            p.publish(i);
+        }
+    });
+
+    let reader = std::thread::spawn(move || {
+        for expected in 0..n {
+            loop {
+                match group.try_recv() {
+                    Ok(v) => {
+                        assert_eq!(
+                            v, expected,
+                            "subscriber group bounded corruption at seq {expected}"
+                        );
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => core::hint::spin_loop(),
+                    Err(TryRecvError::Lagged { .. }) => {
+                        panic!("bounded channel subscriber group should never lag");
+                    }
+                }
+            }
+        }
+    });
+
+    writer.join().unwrap();
+    reader.join().unwrap();
+}
+
+// -------------------------------------------------------------------------
+// Bug fix: subscribe_group::<0>() must panic
+// -------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "SubscriberGroup requires at least 1 subscriber")]
+fn subscribe_group_zero_panics() {
+    let (_p, s) = channel::<u64>(4);
+    let _group = s.subscribe_group::<0>();
+}

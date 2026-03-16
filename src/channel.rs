@@ -48,12 +48,37 @@ pub struct Publisher<T: Copy> {
 unsafe impl<T: Copy + Send> Send for Publisher<T> {}
 
 impl<T: Copy> Publisher<T> {
-    /// Publish a single value. Zero-allocation, O(1).
+    /// Write a single value to the ring without any backpressure check.
+    /// This is the raw publish path used by both `publish()` (lossy) and
+    /// `try_publish()` (after backpressure check passes).
     #[inline]
-    pub fn publish(&mut self, value: T) {
+    fn publish_unchecked(&mut self, value: T) {
         self.ring.slot(self.seq).write(self.seq, value);
         self.ring.cursor.0.store(self.seq, Ordering::Release);
         self.seq += 1;
+    }
+
+    /// Publish a single value. Zero-allocation, O(1).
+    ///
+    /// On a bounded channel (created with [`channel_bounded()`]), this method
+    /// spin-waits until there is room in the ring, ensuring no message loss.
+    /// On a regular (lossy) channel, this publishes immediately without any
+    /// backpressure check.
+    #[inline]
+    pub fn publish(&mut self, value: T) {
+        if self.ring.backpressure.is_some() {
+            let mut v = value;
+            loop {
+                match self.try_publish(v) {
+                    Ok(()) => return,
+                    Err(PublishError::Full(returned)) => {
+                        v = returned;
+                        core::hint::spin_loop();
+                    }
+                }
+            }
+        }
+        self.publish_unchecked(value);
     }
 
     /// Try to publish a single value with backpressure awareness.
@@ -86,7 +111,7 @@ impl<T: Copy> Publisher<T> {
                 }
             }
         }
-        self.publish(value);
+        self.publish_unchecked(value);
         Ok(())
     }
 
@@ -95,9 +120,28 @@ impl<T: Copy> Publisher<T> {
     /// Each slot is written atomically (seqlock), but the cursor advances only
     /// once at the end — consumers see the entire batch appear at once, and
     /// cache-line bouncing on the shared cursor is reduced to one store.
+    ///
+    /// On a bounded channel, this spin-waits for room before publishing each
+    /// value, ensuring no message loss. Values are still committed with a
+    /// single cursor update at the end.
     #[inline]
     pub fn publish_batch(&mut self, values: &[T]) {
         if values.is_empty() {
+            return;
+        }
+        if self.ring.backpressure.is_some() {
+            for &v in values.iter() {
+                let mut val = v;
+                loop {
+                    match self.try_publish(val) {
+                        Ok(()) => break,
+                        Err(PublishError::Full(returned)) => {
+                            val = returned;
+                            core::hint::spin_loop();
+                        }
+                    }
+                }
+            }
             return;
         }
         for (i, &v) in values.iter().enumerate() {
@@ -143,11 +187,18 @@ impl<T: Copy> Publisher<T> {
 
     /// Pre-fault all ring buffer pages by writing a zero byte to each 4 KiB
     /// page. Ensures the first publish does not trigger a page fault.
+    ///
+    /// # Safety
+    ///
+    /// Must be called before any publish/subscribe operations begin.
+    /// Calling this while the ring is in active use is undefined behavior
+    /// because it writes zero bytes to live ring memory via raw pointers,
+    /// which can corrupt slot data and seqlock stamps.
     #[cfg(all(target_os = "linux", feature = "hugepages"))]
-    pub fn prefault(&self) {
+    pub unsafe fn prefault(&self) {
         let ptr = self.ring.slots_ptr() as *mut u8;
         let len = self.ring.slots_byte_len();
-        unsafe { crate::mem::prefault_pages(ptr, len) }
+        crate::mem::prefault_pages(ptr, len)
     }
 }
 
@@ -195,14 +246,21 @@ impl<T: Copy> Subscribable<T> {
     ///
     /// This is dramatically faster than `N` independent [`Subscriber`]s when
     /// polled in a loop on the same thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `N` is 0.
     pub fn subscribe_group<const N: usize>(&self) -> SubscriberGroup<T, N> {
+        assert!(N > 0, "SubscriberGroup requires at least 1 subscriber");
         let head = self.ring.cursor.0.load(Ordering::Acquire);
         let start = if head == u64::MAX { 0 } else { head + 1 };
+        let tracker = self.ring.register_tracker(start);
         SubscriberGroup {
             ring: self.ring.clone(),
             cursors: [start; N],
             total_lagged: 0,
             total_received: 0,
+            tracker,
         }
     }
 
@@ -471,6 +529,17 @@ impl<T: Copy> Subscriber<T> {
     }
 }
 
+impl<T: Copy> Drop for Subscriber<T> {
+    fn drop(&mut self) {
+        if let Some(ref tracker) = self.tracker {
+            if let Some(ref bp) = self.ring.backpressure {
+                let mut trackers = bp.trackers.lock();
+                trackers.retain(|t| !Arc::ptr_eq(t, tracker));
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SubscriberGroup (batched multi-consumer read)
 // ---------------------------------------------------------------------------
@@ -495,6 +564,9 @@ pub struct SubscriberGroup<T: Copy, const N: usize> {
     total_lagged: u64,
     /// Cumulative messages successfully received.
     total_received: u64,
+    /// Per-group cursor tracker for backpressure. `None` on regular
+    /// (lossy) channels — zero overhead.
+    tracker: Option<Arc<Padded<AtomicU64>>>,
 }
 
 unsafe impl<T: Copy + Send, const N: usize> Send for SubscriberGroup<T, N> {}
@@ -521,6 +593,7 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
                     }
                 }
                 self.total_received += 1;
+                self.update_tracker();
                 Ok(value)
             }
             Ok(None) => Err(TryRecvError::Empty),
@@ -544,6 +617,7 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
                             }
                         }
                         self.total_lagged += skipped;
+                        self.update_tracker();
                         return Err(TryRecvError::Lagged { skipped });
                     }
                 }
@@ -633,6 +707,27 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
             0.0
         } else {
             self.total_received as f64 / total as f64
+        }
+    }
+
+    /// Update the backpressure tracker to reflect the minimum cursor position.
+    /// No-op on regular (lossy) channels.
+    #[inline]
+    fn update_tracker(&self) {
+        if let Some(ref tracker) = self.tracker {
+            let min = self.cursors.iter().copied().min().unwrap_or(0);
+            tracker.0.store(min, Ordering::Release);
+        }
+    }
+}
+
+impl<T: Copy, const N: usize> Drop for SubscriberGroup<T, N> {
+    fn drop(&mut self) {
+        if let Some(ref tracker) = self.tracker {
+            if let Some(ref bp) = self.ring.backpressure {
+                let mut trackers = bp.trackers.lock();
+                trackers.retain(|t| !Arc::ptr_eq(t, tracker));
+            }
         }
     }
 }
