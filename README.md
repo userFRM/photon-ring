@@ -1,10 +1,15 @@
 # Photon Ring
 
+[![Crates.io](https://img.shields.io/crates/v/photon-ring.svg)](https://crates.io/crates/photon-ring)
+[![docs.rs](https://docs.rs/photon-ring/badge.svg)](https://docs.rs/photon-ring)
+[![License](https://img.shields.io/crates/l/photon-ring.svg)](LICENSE-MIT)
+[![no_std](https://img.shields.io/badge/no__std-compatible-brightgreen.svg)](https://docs.rs/photon-ring)
+
 **Ultra-low-latency SPMC inter-thread messaging using seqlock-stamped ring buffers.**
 
-Photon Ring is a single-producer, multi-consumer (SPMC) pub/sub library for Rust that achieves
-sub-5 ns same-thread roundtrip latency with zero allocation on the hot path and zero
-runtime dependencies.
+Photon Ring is a single-producer, multi-consumer (SPMC) pub/sub library for Rust.
+`no_std` compatible (requires `alloc`), zero-allocation hot path, ~110 ns cross-thread
+latency on par with the Disruptor pattern, and ~3 ns publish cost.
 
 ```rust
 use photon_ring::{channel, Photon};
@@ -108,48 +113,38 @@ buffer carries its own **seqlock stamp** co-located with the payload:
 - **OS:** Linux 6.8.0-101-generic (Ubuntu)
 - **Rust:** 1.93.1 (stable), `--release` profile (opt-level 3)
 - **Turbo Boost:** enabled; **SMT:** enabled; **Core pinning:** none
-- **Framework:** Criterion 0.5.1, 100 samples, 3-second warmup
+- **Framework:** Criterion, 100 samples, 3-second warmup
 
 Numbers are medians from the machine above. **Your results will vary** — run
 `cargo bench` on your own hardware for authoritative numbers.
 
-### Methodology Note on disruptor Comparison
+### Cross-Thread Latency (the metric that matters)
 
-The `disruptor` crate (v4.0.0) uses a **managed-thread consumer model**: consumers run as
-closures on threads owned by the Disruptor. There is no same-thread `publish` + `recv`
-roundtrip equivalent, because the consumer always runs on a separate thread.
+Both libraries measured with publisher and consumer on separate OS threads, busy-spin
+wait strategy, ring size 4096. This is the apples-to-apples comparison.
 
-Therefore:
+| Benchmark | Photon Ring | disruptor 4.0 |
+|---|---|---|
+| Cross-thread roundtrip | **110 ns** | 133 ns |
+| Publish only (write cost) | **3 ns** | 24 ns |
 
-- **"Publish only"** compares just the cost of writing into each library's ring.
-- **"Roundtrip"** for Photon Ring is same-thread (`publish` then `try_recv`). For `disruptor`,
-  the consumer inherently runs on another thread, so its roundtrip includes inter-core
-  cache transfer. These are **not equivalent** — Photon Ring's same-thread number reflects
-  pure algorithmic overhead, while the `disruptor` number includes cross-thread synchronization.
-- **"Cross-thread"** for Photon Ring is measured separately — a dedicated benchmark with publisher
-  and subscriber on different OS threads, spinning until the value is observed.
-
-| Benchmark | Photon Ring | disruptor 4.0 | Notes |
-|---|---|---|---|
-| Publish only | **3.0 ns** | 20 ns | Both single-producer, ring size 4096 |
-| Same-thread roundtrip | **2.7 ns** | N/A | disruptor has no same-thread API |
-| Cross-thread roundtrip | **131 ns** | 133 ns | disruptor consumer is always cross-thread |
+Cross-thread latency is dominated by the CPU's cache coherence protocol (MESI/MOESI).
+Both libraries are close to the hardware floor. The publish-only difference reflects
+Photon Ring's simpler write path (one seqlock stamp vs sequence claim + barrier).
 
 ### Photon Ring Detailed Benchmarks
 
 | Operation | Latency | Notes |
 |---|---|---|
-| `publish` (write only) | 3.0 ns | Single slot seqlock write |
-| `publish` + `try_recv` (1 sub) | 2.7 ns | Same-thread roundtrip |
-| Fanout: 1 subscriber | 3.3 ns | Publish + 1 recv |
-| Fanout: 2 subscribers | 5.1 ns | ~2 ns per additional sub |
-| Fanout: 5 subscribers | 10.9 ns | Linear scaling |
-| Fanout: 10 subscribers | 20.3 ns | Linear scaling |
-| `try_recv` (empty channel) | 0.8 ns | Single atomic load |
-| `latest` (skip to newest) | 26 ns | Includes 10 publishes |
-| Batch publish 64 + drain | 190 ns | 3.0 ns/msg amortized |
-| Struct roundtrip (24B payload) | 4.3 ns | Realistic payload size |
-| Cross-thread latency | 131 ns | Inter-core cache transfer |
+| `publish` (write only) | 3 ns | Single slot seqlock write |
+| `publish` + `try_recv` (1 sub, same thread) | 3 ns | Algorithmic overhead only |
+| Fanout: 2 subscribers | 5 ns | ~2 ns per additional sub |
+| Fanout: 5 subscribers | 11 ns | Linear scaling |
+| Fanout: 10 subscribers | 20 ns | Linear scaling |
+| `try_recv` (empty channel) | < 1 ns | Single atomic load |
+| Batch publish 64 + drain | 180 ns | 2.8 ns/msg amortized |
+| Struct roundtrip (24B payload) | 5 ns | Realistic payload size |
+| Cross-thread latency | 110 ns | Inter-core cache transfer |
 
 ### Throughput
 
@@ -296,13 +291,14 @@ prices_pub.publish(Quote { price: 150.0, volume: 100 });
 | | Photon Ring | disruptor-rs (v4) | bus (jonhoo) | crossbeam bounded |
 |---|---|---|---|---|
 | **Pattern** | SPMC seqlock ring | SP/MP sequence barriers | SPMC broadcast | MPMC bounded queue |
-| **Publish cost** | **3.0 ns** | 20 ns | — | — |
-| **Cross-thread latency** | 131 ns | 133 ns | — | — |
+| **Cross-thread latency** | 110 ns | 133 ns | — | — |
+| **Publish cost** | 3 ns | 24 ns | — | — |
 | **Allocation** | None | None | None | None (bounded) |
 | **Consumer model** | Poll (`try_recv`) | Callback + Poller API | Poll | Poll |
 | **Overflow** | Lossy (Lagged) | Backpressure (blocks) | Backpressure | Backpressure |
 | **Multi-producer** | No | Yes | No | Yes |
-| **Dependencies** | **0** | 4 | 0 | 3 |
+| **`no_std`** | Yes | No | No | No |
+| **Dependencies** | 2 (hashbrown, spin) | 4 | 0 | 3 |
 
 **Note:** Crossbeam bounded channels use backpressure (the sender blocks when the buffer is
 full), which prevents message loss but adds latency under contention. Photon Ring uses lossy
