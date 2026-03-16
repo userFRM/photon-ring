@@ -1,14 +1,15 @@
 [package]
 name = "photon-ring"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."
 license = "MIT OR Apache-2.0"
 keywords = ["pubsub", "spmc", "seqlock", "no_std", "zero-alloc"]
 categories = ["concurrency", "no-std"]
 readme = "README.md"
-repository = "https://github.com/userFRM/photon-rs"
-homepage = "https://github.com/userFRM/photon-rs"
+repository = "https://github.com/userFRM/photon-ring"
+homepage = "https://github.com/userFRM/photon-ring"
+documentation = "https://docs.rs/photon-ring"
 
 [dependencies]
 hashbrown = "0.16.1"

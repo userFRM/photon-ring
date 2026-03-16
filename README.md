@@ -8,8 +8,8 @@
 **Ultra-low-latency SPMC inter-thread messaging using seqlock-stamped ring buffers.**
 
 Photon Ring is a single-producer, multi-consumer (SPMC) pub/sub library for Rust.
-`no_std` compatible (requires `alloc`), zero-allocation hot path, ~110 ns cross-thread
-latency on par with the Disruptor pattern, and ~3 ns publish cost.
+`no_std` compatible (requires `alloc`), zero-allocation hot path, ~98 ns cross-thread
+latency, and ~3 ns publish cost.
 
 ```rust
 use photon_ring::{channel, Photon};
@@ -125,7 +125,7 @@ wait strategy, ring size 4096. This is the apples-to-apples comparison.
 
 | Benchmark | Photon Ring | disruptor 4.0 |
 |---|---|---|
-| Cross-thread roundtrip | **110 ns** | 133 ns |
+| Cross-thread roundtrip | **98 ns** | 133 ns |
 | Publish only (write cost) | **3 ns** | 24 ns |
 
 Cross-thread latency is dominated by the CPU's cache coherence protocol (MESI/MOESI).
@@ -137,14 +137,14 @@ Photon Ring's simpler write path (one seqlock stamp vs sequence claim + barrier)
 | Operation | Latency | Notes |
 |---|---|---|
 | `publish` (write only) | 3 ns | Single slot seqlock write |
-| `publish` + `try_recv` (1 sub, same thread) | 3 ns | Algorithmic overhead only |
-| Fanout: 2 subscribers | 5 ns | ~2 ns per additional sub |
-| Fanout: 5 subscribers | 11 ns | Linear scaling |
-| Fanout: 10 subscribers | 20 ns | Linear scaling |
+| `publish` + `try_recv` (1 sub, same thread) | 2.5 ns | Stamp-only fast path |
+| Fanout: 2 subscribers | 4 ns | ~1.1 ns per additional sub |
+| Fanout: 5 subscribers | 8 ns | Linear scaling |
+| Fanout: 10 subscribers | 14 ns | Linear scaling |
 | `try_recv` (empty channel) | < 1 ns | Single atomic load |
-| Batch publish 64 + drain | 180 ns | 2.8 ns/msg amortized |
-| Struct roundtrip (24B payload) | 5 ns | Realistic payload size |
-| Cross-thread latency | 110 ns | Inter-core cache transfer |
+| Batch publish 64 + drain | 155 ns | 2.4 ns/msg amortized |
+| Struct roundtrip (24B payload) | 4.4 ns | Realistic payload size |
+| Cross-thread latency | 98 ns | Inter-core cache transfer |
 
 ### Throughput
 
@@ -291,7 +291,7 @@ prices_pub.publish(Quote { price: 150.0, volume: 100 });
 | | Photon Ring | disruptor-rs (v4) | bus (jonhoo) | crossbeam bounded |
 |---|---|---|---|---|
 | **Pattern** | SPMC seqlock ring | SP/MP sequence barriers | SPMC broadcast | MPMC bounded queue |
-| **Cross-thread latency** | 110 ns | 133 ns | — | — |
+| **Cross-thread latency** | 98 ns | 133 ns | — | — |
 | **Publish cost** | 3 ns | 24 ns | — | — |
 | **Allocation** | None | None | None | None (bounded) |
 | **Consumer model** | Poll (`try_recv`) | Callback + Poller API | Poll | Poll |

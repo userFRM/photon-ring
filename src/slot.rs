@@ -78,8 +78,7 @@ impl<T: Copy> Slot<T> {
         let value = unsafe { ptr::read((*self.value.get()).as_ptr()) };
 
         // Verify no torn read
-        fence(Ordering::Acquire);
-        let s2 = self.stamp.load(Ordering::Relaxed);
+        let s2 = self.stamp.load(Ordering::Acquire);
 
         if s1 == s2 {
             Ok(Some(value))

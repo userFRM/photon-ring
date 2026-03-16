@@ -146,36 +146,37 @@ impl<T: Copy> Subscriber<T> {
     /// Try to receive the next message without blocking.
     #[inline]
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
-        let head = self.ring.cursor.0.load(Ordering::Acquire);
-
-        if head == u64::MAX || self.cursor > head {
-            return Err(TryRecvError::Empty);
-        }
-
-        // Fast-path lag check (avoids touching the slot cache line)
-        let cap = self.ring.capacity();
-        if head >= cap {
-            let oldest = head - cap + 1;
-            if self.cursor < oldest {
-                let skipped = oldest - self.cursor;
-                self.cursor = oldest;
-                return Err(TryRecvError::Lagged { skipped });
-            }
-        }
-
         self.read_slot()
     }
 
     /// Spin until the next message is available and return it.
     #[inline]
     pub fn recv(&mut self) -> T {
+        let slot = self.ring.slot(self.cursor);
+        let expected = self.cursor * 2 + 2;
+        loop {
+            match slot.try_read(self.cursor) {
+                Ok(Some(value)) => {
+                    self.cursor += 1;
+                    return value;
+                }
+                Ok(None) => core::hint::spin_loop(),
+                Err(stamp) => {
+                    if stamp < expected {
+                        core::hint::spin_loop();
+                    } else {
+                        // Lagged — fall back to try_recv to handle cursor update
+                        break;
+                    }
+                }
+            }
+        }
+        // Slow path for lag recovery
         loop {
             match self.try_recv() {
                 Ok(val) => return val,
                 Err(TryRecvError::Empty) => core::hint::spin_loop(),
-                Err(TryRecvError::Lagged { .. }) => {
-                    // Cursor already advanced past the gap — retry immediately.
-                }
+                Err(TryRecvError::Lagged { .. }) => {}
             }
         }
     }
@@ -214,31 +215,40 @@ impl<T: Copy> Subscriber<T> {
         }
     }
 
-    /// Internal seqlock read with retry.
+    /// Stamp-only fast-path read. The consumer's local `self.cursor` tells us
+    /// which slot and expected stamp to check — no shared cursor load needed
+    /// on the hot path.
     #[inline]
     fn read_slot(&mut self) -> Result<T, TryRecvError> {
         let slot = self.ring.slot(self.cursor);
+        let expected = self.cursor * 2 + 2;
 
-        loop {
-            match slot.try_read(self.cursor) {
-                Ok(Some(value)) => {
-                    self.cursor += 1;
-                    return Ok(value);
+        match slot.try_read(self.cursor) {
+            Ok(Some(value)) => {
+                self.cursor += 1;
+                Ok(value)
+            }
+            Ok(None) => {
+                // Torn read or write-in-progress — treat as empty for try_recv
+                Err(TryRecvError::Empty)
+            }
+            Err(actual_stamp) => {
+                // Odd stamp means write-in-progress — not ready yet
+                if actual_stamp & 1 != 0 {
+                    return Err(TryRecvError::Empty);
                 }
-                Ok(None) => {
-                    // Torn read or write-in-progress — spin and retry.
-                    core::hint::spin_loop();
-                }
-                Err(actual_stamp) => {
-                    let expected_stamp = self.cursor * 2 + 2;
-                    if actual_stamp < expected_stamp {
-                        return Err(TryRecvError::Empty);
-                    }
-                    // Slot was overwritten — recompute oldest from head cursor
-                    // (authoritative source) rather than inferring from the
-                    // slot stamp, which only tells us about this one slot.
+                if actual_stamp < expected {
+                    // Slot holds an older (or no) sequence — not published yet
+                    Err(TryRecvError::Empty)
+                } else {
+                    // stamp > expected: slot was overwritten — slow path.
+                    // Read head cursor to compute exact lag.
                     let head = self.ring.cursor.0.load(Ordering::Acquire);
                     let cap = self.ring.capacity();
+                    if head == u64::MAX || self.cursor > head {
+                        // Rare race: stamp updated but cursor not yet visible
+                        return Err(TryRecvError::Empty);
+                    }
                     if head >= cap {
                         let oldest = head - cap + 1;
                         if self.cursor < oldest {
@@ -247,8 +257,8 @@ impl<T: Copy> Subscriber<T> {
                             return Err(TryRecvError::Lagged { skipped });
                         }
                     }
-                    // Head hasn't caught up yet (rare timing race) — spin
-                    core::hint::spin_loop();
+                    // Head hasn't caught up yet (rare timing race)
+                    Err(TryRecvError::Empty)
                 }
             }
         }
