@@ -12,9 +12,14 @@
 
 **Ultra-low-latency SPMC/MPMC pub/sub using seqlock-stamped ring buffers.**
 
-Photon Ring is a pub/sub messaging library for Rust that achieves ~95 ns
-cross-thread roundtrip latency (48 ns one-way), ~300M msg/s throughput, with
-zero allocation on the hot path. `no_std` compatible.
+Photon Ring is a zero-allocation pub/sub crate for Rust built around pre-allocated ring buffers, per-slot seqlock stamps, and `T: Pod` payloads. It targets the part of concurrent systems where queueing overhead dominates: market data, telemetry fanout, staged pipelines, and other hot-path broadcast workloads where every subscriber should see every message.
+
+It is `no_std` compatible with `alloc`, supports named-topic buses and typed buses, and includes a pipeline builder for multi-stage thread topologies on supported desktop/server platforms.
+
+> [!IMPORTANT]
+> The default `channel()` is lossy on overflow: the publisher never blocks, and slow subscribers detect drops via `TryRecvError::Lagged`. If lossless delivery matters more than raw latency, use `channel_bounded()`.
+
+## Quick start
 
 ```rust
 use photon_ring::{channel, channel_mpmc, Photon};
@@ -28,6 +33,8 @@ assert_eq!(sub.try_recv(), Ok(42));
 // MPMC channel (multiple producers, clone-able)
 let (mp_pub, subs) = channel_mpmc::<u64>(1024);
 let mp_pub2 = mp_pub.clone();
+mp_pub.publish(1);
+mp_pub2.publish(2);
 
 // Named-topic bus
 let bus = Photon::<u64>::new(1024);
@@ -37,33 +44,42 @@ p.publish(100);
 assert_eq!(s.try_recv(), Ok(100));
 ```
 
+## Installation
+
+```toml
+[dependencies]
+photon-ring = "2"
+```
+
+Optional features:
+
+- `derive`: enables `#[derive(photon_ring::DerivePod)]` for user-defined `Pod` types.
+- `hugepages`: enables Linux memory controls such as `mlock`, `prefault`, and NUMA helpers.
+
+Rust 1.70+ is supported.
+
 ## The problem
 
-Inter-thread communication is the dominant cost in concurrent systems. Traditional
-approaches pay for at least one of:
+Inter-thread communication is often the dominant cost in concurrent systems. Traditional messaging designs usually pay for at least one expensive property on the hot path:
 
 | Approach | Write cost | Read cost | Allocation |
 |---|---|---|---|
 | `std::sync::mpsc` | Lock + CAS | Lock + CAS | Per-message |
-| `Mutex<VecDeque>` | Lock acquisition | Lock acquisition | Dynamic ring growth |
-| Crossbeam bounded channel | CAS on head | CAS on tail | None (pre-allocated) |
-| LMAX Disruptor | Sequence claim + barrier | Sequence barrier spin | None (pre-allocated) |
+| `Mutex<VecDeque>` | Lock acquisition | Lock acquisition | Dynamic growth |
+| `crossbeam-channel` | CAS on head | CAS on tail | None |
+| LMAX Disruptor pattern | Sequence claim + barrier | Sequence barrier spin | None |
 
-The Disruptor eliminated allocation overhead and demonstrated that pre-allocated ring
-buffers with sequence barriers could achieve 8-32 ns latency. But it still relies on
-sequence barriers (shared atomic cursors) that create cache-line contention between
-producer and consumers.
+The Disruptor showed that pre-allocated rings can remove allocator overhead and drive very low latency, but its shared sequence barriers still create cache-line contention between producers and consumers.
 
 ## The solution: seqlock-stamped slots
 
-Photon Ring takes a different approach. Instead of sequence barriers, each slot in the
-ring buffer carries its own **seqlock stamp** co-located with the payload:
+Photon Ring moves synchronization into each slot. Every slot carries its own seqlock stamp beside the payload, so readers validate the data they just loaded instead of bouncing a shared barrier cache line.
 
-```
+```text
                         64 bytes (one cache line)
     +-----------------------------------------------------+
     |  stamp: AtomicU64  |  value: T                      |
-    |  (seqlock)         |  (Pod — all bit patterns valid) |
+    |  (seqlock)         |  (Pod - all bit patterns valid)|
     +-----------------------------------------------------+
     For T <= 56 bytes, stamp and value share one cache line.
     Larger T spills to additional lines (still correct, slightly slower).
@@ -71,100 +87,71 @@ ring buffer carries its own **seqlock stamp** co-located with the payload:
 
 ### Write protocol
 
-```
+```text
 1. stamp = seq * 2 + 1     (odd = write in progress)
-2. fence(Release)           (stamp visible before data)
-3. memcpy(slot.value, data) (direct write, no allocation)
+2. fence(Release)          (stamp visible before data)
+3. memcpy(slot.value, data)
 4. stamp = seq * 2 + 2     (even = write complete, Release)
-5. cursor = seq             (Release — consumers can proceed)
+5. cursor = seq            (Release - consumers can proceed)
 ```
 
 ### Read protocol
 
-```
+```text
 1. s1 = stamp.load(Acquire)
-2. if odd → spin              (writer active)
-3. if s1 < expected → Empty   (not yet published)
-4. if s1 > expected → Lagged  (slot reused, consult head cursor)
-5. value = memcpy(slot)       (direct read, T: Pod)
+2. if odd -> spin
+3. if s1 < expected -> Empty
+4. if s1 > expected -> Lagged
+5. value = memcpy(slot)    (direct read, T: Pod)
 6. s2 = stamp.load(Acquire)
-7. if s1 == s2 → return       (consistent read)
-8. else → retry               (torn read detected)
+7. if s1 == s2 -> return
+8. else -> retry
 ```
 
-### Why this is fast
+## Why this is fast
 
-1. **No shared mutable state on the read path.** Each subscriber has its own cursor
-   (a local `u64`, not an atomic). Subscribers never write to memory that anyone else
-   reads. Zero cache-line bouncing between consumers.
-
-2. **Stamp-in-slot co-location.** For payloads up to 56 bytes, the seqlock stamp and
-   payload share the same cache line. A reader loads the stamp and the data in a single
-   cache-line fetch. The Disruptor pattern requires reading a separate sequence barrier
-   (different cache line) before accessing the slot.
-
-3. **No allocation, ever.** The ring is pre-allocated at construction. Publish is a
-   `memcpy` into a pre-existing slot. No `Arc`, no `Box`, no heap allocation on the
-   hot path.
-
-4. **The `Pod` trait prevents torn-read UB.** Message types must implement `Pod`
-   (plain old data), guaranteeing every bit pattern is valid. A torn read produces
-   a meaningless-but-safe value that the stamp check detects and discards.
-
-5. **Single-producer by type system.** `Publisher::publish` takes `&mut self`, enforced
-   by the Rust borrow checker. No CAS, no lock, no sequence claiming on the write side.
-   For multi-producer, `MpPublisher` uses CAS-based sequence claiming.
+1. **No shared mutable state on the read path.** Each subscriber keeps its own local cursor. Readers do not publish progress into a shared hot cache line unless bounded backpressure tracking is enabled.
+2. **Stamp and payload are co-located.** For `T <= 56` bytes, the stamp check and payload read hit the same cache line.
+3. **No allocation on publish or receive.** The ring is fixed at construction time, and hot-path operations are direct slot reads and writes.
+4. **`T: Pod` makes torn reads safe to reject.** Every bit pattern is valid, so an optimistic torn read is harmless and discarded by the stamp re-check.
+5. **Single-producer SPMC avoids write-side contention.** `Publisher::publish` takes `&mut self`, so the type system enforces one producer without CAS. `MpPublisher` adds an MPMC path when you need multiple concurrent writers.
 
 ## Benchmarks
 
-> Measured on **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8, Rust 1.93.1) and
-> **Apple M1 Pro** (8C, macOS 26.3, Rust 1.92.0). Criterion, 100 samples,
-> `--release`, no core pinning. **Your results will vary.**
+Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8, Rust 1.93.1) and **Apple M1 Pro** (8C, macOS 26.3, Rust 1.92.0), `--release`, 100 samples, no core pinning unless stated.
 
-### vs disruptor-rs (v4.0.0)
+> [!NOTE]
+> These numbers use `Pod` payloads and compare concrete implementations, not abstract algorithms. Scheduler noise, pinning, CPU generation, and payload layout all matter, so treat them as reproducible snapshots rather than universal constants.
 
-|  | Photon Ring | disruptor-rs |
-|---|---|---|
-| Publish only (Intel) | **2.8 ns** | 30.6 ns |
-| Publish only (M1 Pro) | **2.4 ns** | 15.3 ns |
-| Cross-thread (Intel) | **95 ns** | 138 ns |
-| Cross-thread (M1 Pro) | **130 ns** | 186 ns |
+### Against `disruptor-rs`
 
-### Detailed operations (Intel / M1 Pro)
+- **Publish:** 2.8 ns (Intel) / 2.4 ns (M1 Pro), versus 30.6 ns / 15.3 ns for `disruptor-rs`
+- **Cross-thread roundtrip:** 95 ns (Intel) / 130 ns (M1 Pro), versus 138 ns / 186 ns for `disruptor-rs`
 
-- **Publish:** 2.8 / 2.4 ns
-- **Roundtrip (1 sub, same thread):** 2.7 / 8.8 ns
-- **Fanout 10 independent subscribers:** 17 / 27.7 ns
-- **SubscriberGroup (any N, O(1)):** 2.6 / 8.8 ns
-- **MPMC (1 publisher, 1 subscriber):** 12.1 / 10.6 ns
-- **Empty poll:** 0.85 / 1.1 ns
-- **Batch 64 + drain:** 158 / 282 ns
-- **Struct roundtrip (24B):** 4.8 / 9.3 ns
-- **Cross-thread roundtrip:** 95 / 130 ns
+### Core operations
+
+- **Roundtrip (1 subscriber, same thread):** 2.7 ns (Intel) / 8.8 ns (M1 Pro)
+- **Fanout to 10 independent subscribers:** 17.0 ns (Intel) / 27.7 ns (M1 Pro)
+- **`SubscriberGroup` read:** 2.6 ns (Intel) / 8.8 ns (M1 Pro)
+- **MPMC, 1 publisher + 1 subscriber:** 12.1 ns (Intel) / 10.6 ns (M1 Pro)
+- **Empty poll:** 0.85 ns (Intel) / 1.1 ns (M1 Pro)
+- **Batch publish 64 + drain:** 158 ns (Intel) / 282 ns (M1 Pro)
+- **Struct roundtrip (24-byte `Pod`):** 4.8 ns (Intel) / 9.3 ns (M1 Pro)
 - **One-way latency (RDTSC, Intel only):** 48 ns p50
 
 ### Throughput
 
-~300M msg/s on Intel (range: 200-389M), ~88M msg/s on M1 Pro (range: 50-106M).
-Varies with OS thread scheduling, especially on Apple Silicon without core pinning.
-
-### Payload scaling
-
-Benchmarked 8B to 4KB — Photon Ring outperforms the Disruptor at all tested sizes.
-See [`docs/payload-scaling.md`](docs/payload-scaling.md) for full analysis and chart.
-
-**Note:** All Disruptor numbers are measured against
-[`disruptor-rs`](https://crates.io/crates/disruptor) v4.0.0 (the Rust port), not the
-original Java LMAX Disruptor.
+- **Sustained throughput:** about 300M msg/s on Intel and 88M msg/s on M1 Pro
+- **Payload scaling:** Photon Ring outperformed `disruptor-rs` across 8-byte to 4 KiB `Pod` payloads; see [`docs/payload-scaling.md`](docs/payload-scaling.md)
 
 ## Comparison
 
-| | Photon Ring | disruptor-rs (v4) | crossbeam | bus |
+| | Photon Ring | disruptor-rs (v4) | crossbeam-channel | bus |
 |---|---|---|---|---|
 | **Delivery** | Broadcast | Broadcast | Point-to-point queue | Broadcast |
-| **Publish cost** | 2.8 ns / 12.1 ns (MPMC) | 30.6 ns | — | — |
-| **Cross-thread** | 95 ns | 138 ns | — | — |
-| **Throughput** | ~300M msg/s | — | — | — |
+| **Publish cost** | 2.8 ns / 12.1 ns (MPMC) | 30.6 ns | - | - |
+| **Cross-thread** | 95 ns | 138 ns | - | - |
+| **Throughput** | ~300M msg/s | - | - | - |
 | **Topology builder** | Yes | Yes | No | No |
 | **Batch APIs** | Yes | Yes | Iterator | No |
 | **Topic bus** | Yes | No | No | No |
@@ -172,45 +159,29 @@ original Java LMAX Disruptor.
 | **`no_std`** | Yes | No | No | No |
 | **Multi-producer** | Yes | Yes | Yes | No |
 
-`crossbeam-channel` is a queue (each message consumed by one receiver). Use crossbeam
-for point-to-point; use Photon Ring when every subscriber should see every message.
+Use `crossbeam-channel` when one receiver should own each message. Use Photon Ring when each subscriber should observe the same stream with minimal coordination overhead.
 
-## API
+## API overview
 
-**Channels** — `channel::<T>(cap)` creates a single-producer channel (lowest latency).
-`channel_mpmc::<T>(cap)` creates a multi-producer channel where `MpPublisher` is
-`Clone + Send + Sync`. `channel_bounded::<T>(cap, watermark)` creates a lossless
-channel where `try_publish()` returns `Full` instead of overwriting.
+Channels are the lowest-level interface. `channel::<T>(capacity)` creates the fastest single-producer path and returns a `Publisher<T>` plus a cloneable `Subscribable<T>`. `channel_bounded::<T>(capacity, watermark)` adds optional backpressure; `Publisher::try_publish` returns `PublishError::Full(value)` instead of overwriting unread slots. `channel_mpmc::<T>(capacity)` returns `MpPublisher<T>`, which is `Clone + Send + Sync` and uses atomic sequence claiming for concurrent producers. On the write side, the important APIs are `publish`, `publish_with` for in-place construction, `publish_batch` on `Publisher`, and `published`/`capacity` for lightweight counters.
 
-**Consumers** — `Subscriber<T>` provides `try_recv`, `recv`, `recv_with`, `latest`,
-`recv_batch`, and `drain`. `SubscriberGroup<T, N>` reads the ring once for N logical
-subscribers (O(1) fanout regardless of N).
+Subscribers are independent and contention-free by default. `Subscribable::subscribe()` starts from future messages only, while `subscribe_from_oldest()` starts at the oldest message still retained in the ring. `Subscriber<T>` exposes `try_recv`, `recv`, `recv_with`, `latest`, `pending`, `recv_batch`, and `drain`, plus observability counters through `total_received`, `total_lagged`, and `receive_ratio`. If multiple logical consumers are polled on the same thread, `subscribe_group::<N>()` creates a `SubscriberGroup<T, N>` that performs one ring read for the whole group instead of one per logical subscriber.
 
-**Topic buses** — `Photon<T>` routes messages by topic name (all topics share one type).
-`TypedBus` allows different types per topic. Both support `try_publisher()` (returns
-`Option`) and `publisher()` (panics if already taken).
+For topic routing, `Photon<T>` provides a string-keyed bus where all topics share the same payload type, and `TypedBus` allows a different `T: Pod` per topic. Both lazily create topics and expose `publisher`, `try_publisher`, `subscribe`, and `subscribable`. `publisher()` will panic if the publisher for that topic was already taken, and `TypedBus` also panics on type mismatches for an existing topic.
 
-**Pipeline topology** — `Pipeline::builder().input::<T>().then(|x| f(x)).build()`
-chains stages on dedicated threads. Supports `fan_out()` for diamond topologies,
-`shutdown()` for graceful termination, and `panicked_stages()` for health monitoring.
+Pipelines build dedicated-thread processing graphs on supported OS targets. `topology::Pipeline::builder().capacity(...).input::<T>()` returns an input publisher plus a typed builder; `.then(...)` chains stages, `.fan_out(...)` creates a diamond, `.then_a(...)` and `.then_b(...)` extend either branch, and `.build()` returns the final subscriber plus a `Pipeline` handle. The handle supports `shutdown`, `join`, `panicked_stages`, `is_healthy`, and `stage_count`. For manual shutdown outside topology, use `Shutdown`.
 
-**Wait strategies** — `BusySpin` (lowest latency, 100% CPU), `YieldSpin` (PAUSE/WFE),
-`BackoffSpin` (exponential), `Adaptive` (default, three-phase escalation). Use
-`recv_with(strategy)` on any consumer.
-
-**Additional** — core affinity (`pin_to_core_id`), memory control (`mlock`, `prefault`,
-huge pages, NUMA), observability (`total_received`, `total_lagged`, `receive_ratio`),
-`Shutdown` signal, `publish_with` for in-place construction.
+Wait behavior is explicit. `recv_with` accepts `WaitStrategy::BusySpin`, `YieldSpin`, `BackoffSpin`, or `Adaptive` depending on whether you want the absolute lowest wakeup latency or better core sharing. On supported platforms, the crate also includes `affinity` helpers for CPU pinning; with the `hugepages` feature on Linux, you can use `Publisher::mlock`, `Publisher::prefault`, and `mem::{set_numa_preferred, reset_numa_policy}` to reduce page-fault and NUMA noise.
 
 ## Design constraints
 
 | Constraint | Rationale |
 |---|---|
-| `T: Pod` | Every bit pattern must be valid — prevents torn-read UB. See [`Pod` docs](https://docs.rs/photon-ring/latest/photon_ring/trait.Pod.html). |
-| Power-of-two capacity | Bitmask modulo (`seq & mask`) instead of `%` division |
-| Single producer (default) | Seqlock invariant via `&mut self`; MPMC available via `channel_mpmc` |
-| Lossy on overflow (default) | Producer never blocks; consumers detect via `Lagged`. Use `channel_bounded` for lossless. |
-| 64-bit atomics required | Excludes 32-bit ARM Cortex-M |
+| `T: Pod` | Every bit pattern must be valid, which makes optimistic torn reads safe to reject. |
+| Power-of-two capacity | Indexing uses `seq & mask` instead of `%`. |
+| Single producer by default | The fastest path relies on `&mut self` rather than write-side atomics. |
+| Lossy overflow by default | The publisher never blocks; subscribers detect drops through `Lagged`. |
+| 64-bit atomics required | The core algorithm depends on `AtomicU64`. |
 
 ## Platform support
 
@@ -224,38 +195,45 @@ huge pages, NUMA), observability (`total_received`, `total_lagged`, `receive_rat
 | FreeBSD / NetBSD / Android | Yes | Yes | Yes | No |
 | 32-bit ARM (Cortex-M) | No | No | No | No |
 
-## Soundness
+## Soundness and `Pod`
 
-The seqlock read protocol involves an optimistic non-atomic read that may race with
-the writer. The stamp re-check detects torn reads and discards them. This is the same
-pattern used by the Linux kernel (`seqlock_t`) and Facebook's Folly library. Under the
-Rust/C++ abstract memory model, this concurrent access is formally a data race, but it
-is correct on all real hardware for types satisfying `Pod`.
+> [!WARNING]
+> Photon Ring uses a seqlock-style optimistic read: a subscriber may speculatively copy a slot while a writer is updating it, then reject the value if the stamp changed. This pattern is sound for `T: Pod`, but not for arbitrary `Copy` types. If a torn bit pattern could be invalid for `T`, the read would be undefined behavior before Photon Ring had a chance to discard it.
 
-The `Pod` trait enforces that every bit pattern is valid, preventing types like `bool`,
-`char`, `NonZero*`, enums, and references from being used as payloads. For domain types
-that use these, convert at the boundary:
+The `Pod` trait means more than `Copy`: every possible bit pattern of the payload must be valid. Primitive numerics, arrays of `Pod`, and tuples of `Pod` are already supported. For your own structs, use `#[repr(C)]`, stick to `Pod` fields, and implement `Pod` manually or via the `derive` feature when appropriate.
 
-- `bool` → `u8` (0 = false, 1 = true)
-- `enum { A, B, C }` → `u8` (0, 1, 2)
-- `Option<u32>` → `u32` (0 = None, nonzero = Some)
-- `String` / `&str` → `[u8; N]` fixed buffer
+| Type | Why it is not `Pod` | Use instead |
+|---|---|---|
+| `bool` | Only `0` and `1` are valid | `u8` |
+| `char` | Must be a valid Unicode scalar | `u32` |
+| `NonZero<u32>` | `0` is invalid | `u32` |
+| `Option<T>` | The discriminant has invalid patterns | Sentinel integer |
+| Rust `enum` | Only declared variants are valid | `u8` or `u32` |
+| `&T`, `&str` | Pointers must be valid | Value types only |
+| `String`, `Vec<_>` | Heap-owning, has `Drop` | Fixed `[u8; N]` buffer |
 
-Parse at the boundary, publish as a struct of plain numerics. See
-[`Pod` trait docs](https://docs.rs/photon-ring/latest/photon_ring/trait.Pod.html).
+> [!TIP]
+> Keep rich domain types at the edges and publish compact `Pod` messages in the middle. Convert enums, `Option`, booleans, and strings into explicit numeric fields or fixed-size buffers before calling `publish`.
+
+Examples of safe boundary conversions:
+
+- `bool` -> `u8` (`0 = false`, `1 = true`)
+- `enum Side { Buy, Sell }` -> `u8` (`0 = Buy`, `1 = Sell`)
+- `Option<u32>` -> `u32` (`0 = None`, nonzero = `Some`)
+- `String` / `&str` -> `[u8; N]`
 
 ## Running
 
 ```bash
-cargo bench                                    # Full benchmark suite
-cargo bench --bench payload_scaling            # Payload size scaling
-cargo test                                     # All tests
-cargo +nightly miri test --test correctness -- --test-threads=1  # MIRI
-cargo run --release --example market_data      # Throughput demo
-cargo run --release --example pipeline         # Pipeline topology
-cargo run --release --example backpressure     # Lossless delivery
+cargo test
+cargo bench
+cargo bench --bench payload_scaling
+cargo +nightly miri test --test correctness -- --test-threads=1
+cargo run --release --example market_data
+cargo run --release --example pipeline
+cargo run --release --example backpressure
 ```
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE-APACHE).
+Licensed under Apache-2.0. See [LICENSE-APACHE](LICENSE-APACHE).
