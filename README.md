@@ -130,14 +130,20 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
 
 ### Core operations
 
-- **Roundtrip (1 subscriber, same thread):** 2.7 ns (Intel) / 8.8 ns (M1 Pro)
-- **Fanout to 10 independent subscribers:** 17.0 ns (Intel) / 27.7 ns (M1 Pro)
-- **`SubscriberGroup` read:** 2.6 ns (Intel) / 8.8 ns (M1 Pro)
-- **MPMC, 1 publisher + 1 subscriber:** 12.1 ns (Intel) / 10.6 ns (M1 Pro)
-- **Empty poll:** 0.85 ns (Intel) / 1.1 ns (M1 Pro)
-- **Batch publish 64 + drain:** 158 ns (Intel) / 282 ns (M1 Pro)
-- **Struct roundtrip (24-byte `Pod`):** 4.8 ns (Intel) / 9.3 ns (M1 Pro)
-- **One-way latency (RDTSC, Intel only):** 48 ns p50
+```
+                                          Intel i7-10700KF    Apple M1 Pro
+                                          ────────────────    ────────────
+  Publish only                                    2.8 ns          2.4 ns
+  Roundtrip (1 sub, same thread)                  2.7 ns          8.8 ns
+  Fanout (10 independent subs)                   17.0 ns         27.7 ns
+  SubscriberGroup (any N, O(1))                   2.6 ns          8.8 ns
+  MPMC (1 pub, 1 sub)                            12.1 ns         10.6 ns
+  Empty poll                                      0.85 ns         1.1 ns
+  Batch 64 + drain                              158   ns        282   ns
+  Struct roundtrip (24B Pod)                      4.8 ns          9.3 ns
+  Cross-thread roundtrip                         95   ns        130   ns
+  One-way latency (RDTSC)                        48   ns p50        —
+```
 
 ### Throughput
 
