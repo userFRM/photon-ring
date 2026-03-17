@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-03-17
+
+### Added
+- **`DependencyBarrier`:** Consumer dependency graphs — downstream subscribers
+  can gate their reads behind upstream subscribers, enabling ordered
+  multi-stage processing pipelines.
+  - `DependencyBarrier::from_subscribers(&[&Subscriber])` — creates a barrier
+  - `Subscriber::try_recv_gated(&barrier)` — non-blocking gated receive
+  - `Subscriber::recv_gated(&barrier)` — blocking gated receive
+  - `Subscribable::subscribe_tracked()` — creates a subscriber with cursor
+    tracker on lossy channels (needed for dependency graphs)
+  - `Subscriber::tracker()` — exposes the cursor tracker for barrier construction
+- 10 new tests covering single/multi upstream, cross-thread, bounded channels
+
 ## [2.1.1] - 2026-03-17
 
 ### Fixed

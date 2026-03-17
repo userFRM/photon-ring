@@ -49,6 +49,7 @@ extern crate alloc;
     target_os = "android",
 ))]
 pub mod affinity;
+pub mod barrier;
 mod bus;
 pub mod channel;
 #[cfg(all(target_os = "linux", feature = "hugepages"))]
@@ -69,12 +70,14 @@ pub mod topology;
 mod typed_bus;
 pub mod wait;
 
+pub use barrier::DependencyBarrier;
 pub use bus::Photon;
 pub use channel::{
     channel, channel_bounded, channel_mpmc, Drain, MpPublisher, PublishError, Publisher,
     Subscribable, Subscriber, SubscriberGroup, TryRecvError,
 };
 pub use pod::Pod;
+pub use ring::Padded;
 
 /// Derive macro for the [`Pod`] trait. Requires the `derive` feature.
 ///

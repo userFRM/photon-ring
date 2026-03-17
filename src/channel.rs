@@ -1,6 +1,7 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::barrier::DependencyBarrier;
 use crate::pod::Pod;
 use crate::ring::{Padded, SharedRing};
 use crate::slot::Slot;
@@ -373,6 +374,43 @@ impl<T: Pod> Subscribable<T> {
             total_received: 0,
         }
     }
+
+    /// Create a subscriber with an active cursor tracker.
+    ///
+    /// Use this when the subscriber will participate in a
+    /// [`DependencyBarrier`] as an upstream consumer.
+    ///
+    /// On **bounded** channels, this behaves identically to
+    /// [`subscribe()`](Self::subscribe) — those subscribers already have
+    /// trackers.
+    ///
+    /// On **lossy** channels, [`subscribe()`](Self::subscribe) omits the
+    /// tracker (zero overhead for the common case). This method creates a
+    /// standalone tracker so that a [`DependencyBarrier`] can read the
+    /// subscriber's cursor position. The tracker is **not** registered
+    /// with the ring's backpressure system — it is purely for dependency
+    /// graph coordination.
+    pub fn subscribe_tracked(&self) -> Subscriber<T> {
+        let head = self.ring.cursor.0.load(Ordering::Acquire);
+        let start = if head == u64::MAX { 0 } else { head + 1 };
+        // On bounded channels, register_tracker returns Some (backpressure-aware).
+        // On lossy channels, it returns None — so we create a standalone tracker.
+        let tracker = self
+            .ring
+            .register_tracker(start)
+            .or_else(|| Some(Arc::new(Padded(AtomicU64::new(start)))));
+        let slots_ptr = self.ring.slots_ptr();
+        let mask = self.ring.mask;
+        Subscriber {
+            ring: self.ring.clone(),
+            slots_ptr,
+            mask,
+            cursor: start,
+            tracker,
+            total_lagged: 0,
+            total_received: 0,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -625,6 +663,88 @@ impl<T: Pod> Subscriber<T> {
     /// by retrying after cursor advancement.
     pub fn drain(&mut self) -> Drain<'_, T> {
         Drain { sub: self }
+    }
+
+    /// Get this subscriber's cursor tracker for use in a
+    /// [`DependencyBarrier`].
+    ///
+    /// Returns `None` if the subscriber was created on a lossy channel
+    /// without [`subscribe_tracked()`](crate::Subscribable::subscribe_tracked).
+    /// Use `subscribe_tracked()` to ensure a tracker is always present.
+    #[inline]
+    pub fn tracker(&self) -> Option<Arc<Padded<AtomicU64>>> {
+        self.tracker.clone()
+    }
+
+    /// Try to receive the next message, but only if all upstream
+    /// subscribers in the barrier have already processed it.
+    ///
+    /// Returns [`TryRecvError::Empty`] if the upstream barrier has not
+    /// yet advanced past this subscriber's cursor, or if no new message
+    /// is available from the ring.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use photon_ring::{channel, DependencyBarrier, TryRecvError};
+    ///
+    /// let (mut pub_, subs) = channel::<u64>(64);
+    /// let mut upstream = subs.subscribe_tracked();
+    /// let barrier = DependencyBarrier::from_subscribers(&[&upstream]);
+    /// let mut downstream = subs.subscribe();
+    ///
+    /// pub_.publish(42);
+    ///
+    /// // Downstream can't read — upstream hasn't consumed it yet
+    /// assert_eq!(downstream.try_recv_gated(&barrier), Err(TryRecvError::Empty));
+    ///
+    /// upstream.try_recv().unwrap();
+    ///
+    /// // Now downstream can proceed
+    /// assert_eq!(downstream.try_recv_gated(&barrier), Ok(42));
+    /// ```
+    #[inline]
+    pub fn try_recv_gated(&mut self, barrier: &DependencyBarrier) -> Result<T, TryRecvError> {
+        // The barrier's slowest() returns the minimum tracker value among
+        // upstreams, which is the *next sequence to read* for the slowest
+        // upstream. If slowest() <= self.cursor, the slowest upstream hasn't
+        // finished reading self.cursor yet.
+        if barrier.slowest() <= self.cursor {
+            return Err(TryRecvError::Empty);
+        }
+        self.try_recv()
+    }
+
+    /// Blocking receive gated by a dependency barrier.
+    ///
+    /// Spins until all upstream subscribers in the barrier have processed
+    /// the next message, then reads and returns it. On lag, the cursor is
+    /// advanced and the method retries.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use photon_ring::{channel, DependencyBarrier};
+    ///
+    /// let (mut pub_, subs) = channel::<u64>(64);
+    /// let mut upstream = subs.subscribe_tracked();
+    /// let barrier = DependencyBarrier::from_subscribers(&[&upstream]);
+    /// let mut downstream = subs.subscribe();
+    ///
+    /// pub_.publish(99);
+    /// upstream.try_recv().unwrap();
+    ///
+    /// assert_eq!(downstream.recv_gated(&barrier), 99);
+    /// ```
+    #[inline]
+    pub fn recv_gated(&mut self, barrier: &DependencyBarrier) -> T {
+        loop {
+            match self.try_recv_gated(barrier) {
+                Ok(val) => return val,
+                Err(TryRecvError::Empty) => core::hint::spin_loop(),
+                Err(TryRecvError::Lagged { .. }) => {}
+            }
+        }
     }
 
     /// Update the backpressure tracker to reflect the current cursor position.
