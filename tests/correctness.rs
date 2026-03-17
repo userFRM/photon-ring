@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use photon_ring::{
-    channel, channel_bounded, channel_mpmc, Photon, Pod, PublishError, Shutdown, TryRecvError,
-    TypedBus,
+    channel, channel_bounded, channel_mpmc, DependencyBarrier, Photon, Pod, PublishError, Shutdown,
+    TryRecvError, TypedBus,
 };
 
 // -------------------------------------------------------------------------
@@ -1494,4 +1494,200 @@ fn shutdown_default() {
     assert!(!shutdown.is_shutdown());
     shutdown.trigger();
     assert!(shutdown.is_shutdown());
+}
+
+// -------------------------------------------------------------------------
+// DependencyBarrier
+// -------------------------------------------------------------------------
+
+#[test]
+fn dependency_barrier_basic() {
+    let (mut pub_, subs) = channel::<u64>(64);
+    let mut upstream_a = subs.subscribe_tracked();
+    let barrier = DependencyBarrier::from_subscribers(&[&upstream_a]);
+    let mut downstream_c = subs.subscribe();
+
+    pub_.publish(42);
+
+    // C can't read — A hasn't consumed it yet
+    assert_eq!(
+        downstream_c.try_recv_gated(&barrier),
+        Err(TryRecvError::Empty)
+    );
+
+    // A consumes
+    assert_eq!(upstream_a.try_recv(), Ok(42));
+
+    // Now C can proceed
+    assert_eq!(downstream_c.try_recv_gated(&barrier), Ok(42));
+}
+
+#[test]
+fn dependency_barrier_blocks_until_upstream() {
+    let (mut pub_, subs) = channel::<u64>(64);
+    let mut upstream = subs.subscribe_tracked();
+    let barrier = DependencyBarrier::from_subscribers(&[&upstream]);
+    let mut downstream = subs.subscribe();
+
+    // Publish several messages
+    for i in 0u64..5 {
+        pub_.publish(i);
+    }
+
+    // Downstream is blocked on every message until upstream processes them
+    for i in 0u64..5 {
+        assert_eq!(
+            downstream.try_recv_gated(&barrier),
+            Err(TryRecvError::Empty)
+        );
+        assert_eq!(upstream.try_recv(), Ok(i));
+        assert_eq!(downstream.try_recv_gated(&barrier), Ok(i));
+    }
+
+    // Nothing left
+    assert_eq!(
+        downstream.try_recv_gated(&barrier),
+        Err(TryRecvError::Empty)
+    );
+}
+
+#[test]
+fn dependency_barrier_multiple_upstreams() {
+    let (mut pub_, subs) = channel::<u64>(64);
+    let mut upstream_a = subs.subscribe_tracked();
+    let mut upstream_b = subs.subscribe_tracked();
+    let barrier = DependencyBarrier::from_subscribers(&[&upstream_a, &upstream_b]);
+    let mut downstream = subs.subscribe();
+
+    pub_.publish(100);
+
+    // Neither upstream has consumed — blocked
+    assert_eq!(
+        downstream.try_recv_gated(&barrier),
+        Err(TryRecvError::Empty)
+    );
+
+    // Only A consumes — still blocked (B hasn't)
+    assert_eq!(upstream_a.try_recv(), Ok(100));
+    assert_eq!(
+        downstream.try_recv_gated(&barrier),
+        Err(TryRecvError::Empty)
+    );
+
+    // B consumes — now downstream can proceed
+    assert_eq!(upstream_b.try_recv(), Ok(100));
+    assert_eq!(downstream.try_recv_gated(&barrier), Ok(100));
+}
+
+#[test]
+fn dependency_barrier_cross_thread() {
+    use std::sync::Arc as StdArc;
+    use std::thread;
+
+    let (mut pub_, subs) = channel::<u64>(64);
+    let mut upstream = subs.subscribe_tracked();
+    let barrier = StdArc::new(DependencyBarrier::from_subscribers(&[&upstream]));
+    let mut downstream = subs.subscribe();
+
+    let barrier_clone = barrier.clone();
+    let handle = thread::spawn(move || {
+        let mut results = Vec::new();
+        for _ in 0..10 {
+            results.push(downstream.recv_gated(&barrier_clone));
+        }
+        results
+    });
+
+    for i in 0u64..10 {
+        pub_.publish(i);
+        // Upstream must consume for downstream to proceed
+        assert_eq!(upstream.try_recv(), Ok(i));
+    }
+
+    let results = handle.join().unwrap();
+    assert_eq!(results, (0..10).collect::<Vec<_>>());
+}
+
+#[test]
+fn dependency_barrier_with_bounded_channel() {
+    let (mut pub_, subs) = channel_bounded::<u64>(64, 0);
+    // On bounded channels, subscribe() already has a tracker.
+    // subscribe_tracked() should also work.
+    let mut upstream = subs.subscribe_tracked();
+    let barrier = DependencyBarrier::from_subscribers(&[&upstream]);
+    let mut downstream = subs.subscribe();
+
+    pub_.publish(77);
+
+    assert_eq!(
+        downstream.try_recv_gated(&barrier),
+        Err(TryRecvError::Empty)
+    );
+    assert_eq!(upstream.try_recv(), Ok(77));
+    assert_eq!(downstream.try_recv_gated(&barrier), Ok(77));
+}
+
+#[test]
+fn dependency_barrier_recv_gated_blocks_then_returns() {
+    use std::sync::Arc as StdArc;
+    use std::thread;
+
+    let (mut pub_, subs) = channel::<u64>(64);
+    let mut upstream = subs.subscribe_tracked();
+    let barrier = StdArc::new(DependencyBarrier::from_subscribers(&[&upstream]));
+    let mut downstream = subs.subscribe();
+
+    pub_.publish(42);
+
+    let barrier_clone = barrier.clone();
+    let handle = thread::spawn(move || downstream.recv_gated(&barrier_clone));
+
+    // Small delay so the downstream thread spins
+    std::thread::sleep(std::time::Duration::from_millis(5));
+
+    // Now upstream consumes, unblocking downstream
+    assert_eq!(upstream.try_recv(), Ok(42));
+
+    let result = handle.join().unwrap();
+    assert_eq!(result, 42);
+}
+
+#[test]
+fn dependency_barrier_upstream_count() {
+    let (_pub_, subs) = channel::<u64>(64);
+    let a = subs.subscribe_tracked();
+    let b = subs.subscribe_tracked();
+    let c = subs.subscribe_tracked();
+    let barrier = DependencyBarrier::from_subscribers(&[&a, &b, &c]);
+    assert_eq!(barrier.upstream_count(), 3);
+}
+
+#[test]
+fn subscribe_tracked_has_tracker() {
+    let (_pub_, subs) = channel::<u64>(64);
+    let sub = subs.subscribe_tracked();
+    assert!(
+        sub.tracker().is_some(),
+        "subscribe_tracked() must create a tracker"
+    );
+}
+
+#[test]
+fn subscribe_regular_no_tracker_on_lossy() {
+    let (_pub_, subs) = channel::<u64>(64);
+    let sub = subs.subscribe();
+    assert!(
+        sub.tracker().is_none(),
+        "subscribe() on lossy channel should have no tracker"
+    );
+}
+
+#[test]
+fn subscribe_regular_has_tracker_on_bounded() {
+    let (_pub_, subs) = channel_bounded::<u64>(64, 0);
+    let sub = subs.subscribe();
+    assert!(
+        sub.tracker().is_some(),
+        "subscribe() on bounded channel should have a tracker"
+    );
 }

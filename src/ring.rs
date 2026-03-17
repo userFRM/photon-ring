@@ -10,8 +10,16 @@ use core::sync::atomic::AtomicU64;
 use spin::Mutex;
 
 /// Cache-line padding to prevent false sharing between hot atomics.
+///
+/// Wraps a value with `#[repr(align(64))]` to ensure it occupies its
+/// own cache line. Used internally for cursor trackers and the ring
+/// cursor.
+///
+/// Exposed publicly so that [`DependencyBarrier::new`](crate::DependencyBarrier::new)
+/// and [`Subscriber::tracker`](crate::Subscriber::tracker) can refer to
+/// `Arc<Padded<AtomicU64>>` in their signatures.
 #[repr(align(64))]
-pub(crate) struct Padded<T>(pub(crate) T);
+pub struct Padded<T>(pub T);
 
 /// Backpressure state attached to a [`SharedRing`] when created via
 /// [`channel_bounded`](crate::channel::channel_bounded).
