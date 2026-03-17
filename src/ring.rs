@@ -1,6 +1,7 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::pod::Pod;
 use crate::slot::Slot;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -39,7 +40,7 @@ pub(crate) struct SharedRing<T> {
     pub(crate) next_seq: Option<Padded<AtomicU64>>,
 }
 
-impl<T: Copy> SharedRing<T> {
+impl<T: Pod> SharedRing<T> {
     pub(crate) fn new(capacity: usize) -> Self {
         assert!(
             capacity.is_power_of_two(),

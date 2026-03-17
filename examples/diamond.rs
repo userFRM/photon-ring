@@ -26,26 +26,34 @@ const NUM_ORDERS: u32 = 20_000;
 const LARGE_ORDER_THRESHOLD: u32 = 500;
 
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 struct Order {
     id: u32,
     price: f64,
     quantity: u32,
 }
 
+// SAFETY: Order is #[repr(C)] with all numeric fields;
+// every bit pattern is a valid Order.
+unsafe impl photon_ring::Pod for Order {}
+
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 #[allow(dead_code)]
 struct TaggedOrder {
     id: u32,
     price: f64,
     quantity: u32,
-    tag: Tag,
+    /// 0 = Large, 1 = Small (enums are NOT Pod)
+    tag: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Tag {
-    Large,
-    Small,
-}
+// SAFETY: TaggedOrder is #[repr(C)] with all numeric fields;
+// every bit pattern is a valid TaggedOrder.
+unsafe impl photon_ring::Pod for TaggedOrder {}
+
+const TAG_LARGE: u32 = 0;
+const TAG_SMALL: u32 = 1;
 
 fn main() {
     // Source ring: publisher → {filter_a, filter_b}
@@ -65,7 +73,7 @@ fn main() {
                         id: order.id,
                         price: order.price,
                         quantity: order.quantity,
-                        tag: Tag::Large,
+                        tag: TAG_LARGE,
                     });
                 }
             }
@@ -84,7 +92,7 @@ fn main() {
                         id: order.id,
                         price: order.price,
                         quantity: order.quantity,
-                        tag: Tag::Small,
+                        tag: TAG_SMALL,
                     });
                 }
             }

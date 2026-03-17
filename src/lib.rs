@@ -13,8 +13,8 @@
 //!
 //! - **Seqlock per slot** — stamp and payload share a cache line; readers never
 //!   take a lock, writers never allocate.
-//! - **`T: Copy`** — enables safe `memcpy` reads; torn reads are detected and
-//!   retried (no `Drop` / double-free concerns).
+//! - **`T: Pod`** — restricts payloads to plain-old-data types where every bit
+//!   pattern is valid, making torn seqlock reads harmless (no UB).
 //! - **Per-consumer cursor** — zero contention between subscribers.
 //! - **Single-producer** — no write-side synchronisation; the seqlock invariant
 //!   is upheld by `&mut self` on [`Publisher::publish`].
@@ -53,6 +53,7 @@ mod bus;
 pub mod channel;
 #[cfg(all(target_os = "linux", feature = "hugepages"))]
 pub mod mem;
+mod pod;
 pub(crate) mod ring;
 mod shutdown;
 pub(crate) mod slot;
@@ -73,6 +74,17 @@ pub use channel::{
     channel, channel_bounded, channel_mpmc, Drain, MpPublisher, PublishError, Publisher,
     Subscribable, Subscriber, SubscriberGroup, TryRecvError,
 };
+pub use pod::Pod;
+
+/// Derive macro for the [`Pod`] trait. Requires the `derive` feature.
+///
+/// ```ignore
+/// #[derive(photon_ring::DerivePod, Clone, Copy)]
+/// #[repr(C)]
+/// struct Quote { price: f64, volume: u32 }
+/// ```
+#[cfg(feature = "derive")]
+pub use photon_ring_derive::Pod as DerivePod;
 pub use shutdown::Shutdown;
 pub use typed_bus::TypedBus;
 pub use wait::WaitStrategy;

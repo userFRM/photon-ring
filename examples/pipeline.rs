@@ -13,12 +13,18 @@ use photon_ring::{channel, TryRecvError};
 use std::thread;
 
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 struct RawTick {
     price: f64,
     volume: u32,
 }
 
+// SAFETY: RawTick is #[repr(C)] with all numeric fields;
+// every bit pattern is a valid RawTick.
+unsafe impl photon_ring::Pod for RawTick {}
+
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 #[allow(dead_code)]
 struct EnrichedTick {
     price: f64,
@@ -26,11 +32,21 @@ struct EnrichedTick {
     vwap: f64,
 }
 
+// SAFETY: EnrichedTick is #[repr(C)] with all numeric fields;
+// every bit pattern is a valid EnrichedTick.
+unsafe impl photon_ring::Pod for EnrichedTick {}
+
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 struct Signal {
-    buy: bool,
+    /// 0 = sell, 1 = buy (bool is NOT Pod)
+    buy: u8,
     strength: f64,
 }
+
+// SAFETY: Signal is #[repr(C)] with all numeric fields;
+// every bit pattern is a valid Signal.
+unsafe impl photon_ring::Pod for Signal {}
 
 fn main() {
     // Stage 0 → Stage 1: raw ticks
@@ -72,7 +88,7 @@ fn main() {
     let stage2 = thread::spawn(move || loop {
         match sub1.try_recv() {
             Ok(tick) => {
-                let buy = tick.price < tick.vwap;
+                let buy = if tick.price < tick.vwap { 1u8 } else { 0u8 };
                 let strength = (tick.vwap - tick.price).abs() / tick.vwap;
                 pub2.publish(Signal { buy, strength });
             }

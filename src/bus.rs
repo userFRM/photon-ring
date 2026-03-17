@@ -4,6 +4,7 @@
 use alloc::string::{String, ToString};
 
 use crate::channel::{self, Publisher, Subscribable, Subscriber};
+use crate::pod::Pod;
 use hashbrown::HashMap;
 use spin::Mutex;
 
@@ -19,17 +20,17 @@ use spin::Mutex;
 /// pub_.publish(100);
 /// assert_eq!(sub.try_recv(), Ok(100));
 /// ```
-pub struct Photon<T: Copy + Send + 'static> {
+pub struct Photon<T: Pod> {
     topics: Mutex<HashMap<String, TopicEntry<T>>>,
     default_capacity: usize,
 }
 
-struct TopicEntry<T: Copy + Send> {
+struct TopicEntry<T: Pod> {
     subscribable: Subscribable<T>,
     publisher: Option<Publisher<T>>,
 }
 
-impl<T: Copy + Send + 'static> Photon<T> {
+impl<T: Pod> Photon<T> {
     /// Create a bus. `capacity` is the ring size for each topic (power of two).
     pub fn new(capacity: usize) -> Self {
         Photon {
@@ -52,6 +53,17 @@ impl<T: Copy + Send + 'static> Photon<T> {
             .publisher
             .take()
             .unwrap_or_else(|| panic!("publisher already taken for topic '{}'", topic))
+    }
+
+    /// Try to take the publisher for a topic. Returns `None` if the
+    /// publisher was already taken.
+    pub fn try_publisher(&self, topic: &str) -> Option<Publisher<T>> {
+        let mut topics = self.topics.lock();
+        if !topics.contains_key(topic) {
+            topics.insert(topic.to_string(), Self::make_entry(self.default_capacity));
+        }
+        let entry = topics.get_mut(topic).unwrap();
+        entry.publisher.take()
     }
 
     /// Subscribe to a topic (future messages only). Creates the topic if needed.

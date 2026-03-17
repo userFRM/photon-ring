@@ -1,3 +1,4 @@
 /target
 *.o
 *.d
+rust_out

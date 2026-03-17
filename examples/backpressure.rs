@@ -19,22 +19,24 @@ use std::time::Instant;
 const NUM_FILLS: u64 = 10_000;
 const RING_SIZE: usize = 256;
 
-/// An order fill event — must be `Copy` for Photon Ring.
+/// An order fill event — must implement `Pod` for Photon Ring.
+///
+/// Note: enums like `Side { Buy, Sell }` are NOT `Pod` because not every
+/// bit pattern is a valid discriminant. Use a numeric field instead.
 #[derive(Debug, Clone, Copy)]
+#[repr(C)]
 #[allow(dead_code)]
 struct Fill {
     order_id: u64,
     price: f64,
     quantity: u32,
-    side: Side,
+    /// 0 = Buy, 1 = Sell
+    side: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
-enum Side {
-    Buy,
-    Sell,
-}
+// SAFETY: Fill is #[repr(C)] with all numeric fields;
+// every bit pattern is a valid Fill.
+unsafe impl photon_ring::Pod for Fill {}
 
 fn main() {
     println!("Backpressure demo: reliable order fill pipeline");
@@ -94,11 +96,7 @@ fn main() {
             order_id: published,
             price: 100.0 + (published as f64) * 0.01,
             quantity: 100 + (published % 500) as u32,
-            side: if published % 2 == 0 {
-                Side::Buy
-            } else {
-                Side::Sell
-            },
+            side: if published % 2 == 0 { 0 } else { 1 },
         };
 
         match publisher.try_publish(fill) {

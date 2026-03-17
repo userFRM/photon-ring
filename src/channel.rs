@@ -1,6 +1,7 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::pod::Pod;
 use crate::ring::{Padded, SharedRing};
 use crate::slot::Slot;
 use crate::wait::WaitStrategy;
@@ -38,7 +39,7 @@ pub enum PublishError<T> {
 /// There is exactly one `Publisher` per channel. It is `Send` but not `Sync` —
 /// only one thread may publish at a time (single-producer guarantee enforced
 /// by `&mut self`).
-pub struct Publisher<T: Copy> {
+pub struct Publisher<T: Pod> {
     ring: Arc<SharedRing<T>>,
     /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
     /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
@@ -53,9 +54,9 @@ pub struct Publisher<T: Copy> {
     cached_slowest: u64,
 }
 
-unsafe impl<T: Copy + Send> Send for Publisher<T> {}
+unsafe impl<T: Pod> Send for Publisher<T> {}
 
-impl<T: Copy> Publisher<T> {
+impl<T: Pod> Publisher<T> {
     /// Write a single value to the ring without any backpressure check.
     /// This is the raw publish path used by both `publish()` (lossy) and
     /// `try_publish()` (after backpressure check passes).
@@ -251,11 +252,11 @@ impl<T: Copy> Publisher<T> {
 ///
 /// Send this to other threads and call [`subscribe`](Subscribable::subscribe)
 /// to create independent consumers.
-pub struct Subscribable<T: Copy> {
+pub struct Subscribable<T: Pod> {
     ring: Arc<SharedRing<T>>,
 }
 
-impl<T: Copy> Clone for Subscribable<T> {
+impl<T: Pod> Clone for Subscribable<T> {
     fn clone(&self) -> Self {
         Subscribable {
             ring: self.ring.clone(),
@@ -263,10 +264,10 @@ impl<T: Copy> Clone for Subscribable<T> {
     }
 }
 
-unsafe impl<T: Copy + Send> Send for Subscribable<T> {}
-unsafe impl<T: Copy + Send> Sync for Subscribable<T> {}
+unsafe impl<T: Pod> Send for Subscribable<T> {}
+unsafe impl<T: Pod> Sync for Subscribable<T> {}
 
-impl<T: Copy> Subscribable<T> {
+impl<T: Pod> Subscribable<T> {
     /// Create a subscriber that will see only **future** messages.
     pub fn subscribe(&self) -> Subscriber<T> {
         let head = self.ring.cursor.0.load(Ordering::Acquire);
@@ -348,7 +349,7 @@ impl<T: Copy> Subscribable<T> {
 /// The read side of a Photon SPMC channel.
 ///
 /// Each subscriber has its own cursor — no contention between consumers.
-pub struct Subscriber<T: Copy> {
+pub struct Subscriber<T: Pod> {
     ring: Arc<SharedRing<T>>,
     /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
     /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
@@ -365,9 +366,9 @@ pub struct Subscriber<T: Copy> {
     total_received: u64,
 }
 
-unsafe impl<T: Copy + Send> Send for Subscriber<T> {}
+unsafe impl<T: Pod> Send for Subscriber<T> {}
 
-impl<T: Copy> Subscriber<T> {
+impl<T: Pod> Subscriber<T> {
     /// Try to receive the next message without blocking.
     #[inline]
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
@@ -629,7 +630,7 @@ impl<T: Copy> Subscriber<T> {
     }
 }
 
-impl<T: Copy> Drop for Subscriber<T> {
+impl<T: Pod> Drop for Subscriber<T> {
     fn drop(&mut self) {
         if let Some(ref tracker) = self.tracker {
             if let Some(ref bp) = self.ring.backpressure {
@@ -649,11 +650,11 @@ impl<T: Copy> Drop for Subscriber<T> {
 /// by retrying after cursor advancement.
 ///
 /// Created by [`Subscriber::drain`].
-pub struct Drain<'a, T: Copy> {
+pub struct Drain<'a, T: Pod> {
     sub: &'a mut Subscriber<T>,
 }
 
-impl<'a, T: Copy> Iterator for Drain<'a, T> {
+impl<'a, T: Pod> Iterator for Drain<'a, T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {
         loop {
@@ -684,7 +685,7 @@ impl<'a, T: Copy> Iterator for Drain<'a, T> {
 /// p.publish(42);
 /// assert_eq!(group.try_recv(), Ok(42));
 /// ```
-pub struct SubscriberGroup<T: Copy, const N: usize> {
+pub struct SubscriberGroup<T: Pod, const N: usize> {
     ring: Arc<SharedRing<T>>,
     /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
     /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
@@ -704,9 +705,9 @@ pub struct SubscriberGroup<T: Copy, const N: usize> {
     tracker: Option<Arc<Padded<AtomicU64>>>,
 }
 
-unsafe impl<T: Copy + Send, const N: usize> Send for SubscriberGroup<T, N> {}
+unsafe impl<T: Pod, const N: usize> Send for SubscriberGroup<T, N> {}
 
-impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
+impl<T: Pod, const N: usize> SubscriberGroup<T, N> {
     /// Try to receive the next message for the group.
     ///
     /// Performs a single seqlock read and one cursor increment — no
@@ -878,7 +879,7 @@ impl<T: Copy, const N: usize> SubscriberGroup<T, N> {
     }
 }
 
-impl<T: Copy, const N: usize> Drop for SubscriberGroup<T, N> {
+impl<T: Pod, const N: usize> Drop for SubscriberGroup<T, N> {
     fn drop(&mut self) {
         if let Some(ref tracker) = self.tracker {
             if let Some(ref bp) = self.ring.backpressure {
@@ -905,7 +906,7 @@ impl<T: Copy, const N: usize> Drop for SubscriberGroup<T, N> {
 /// pub_.publish(42);
 /// assert_eq!(sub.try_recv(), Ok(42));
 /// ```
-pub fn channel<T: Copy + Send>(capacity: usize) -> (Publisher<T>, Subscribable<T>) {
+pub fn channel<T: Pod>(capacity: usize) -> (Publisher<T>, Subscribable<T>) {
     let ring = Arc::new(SharedRing::new(capacity));
     let slots_ptr = ring.slots_ptr();
     let mask = ring.mask;
@@ -958,7 +959,7 @@ pub fn channel<T: Copy + Send>(capacity: usize) -> (Publisher<T>, Subscribable<T
 /// assert_eq!(sub.try_recv(), Ok(0));
 /// p.try_publish(99).unwrap();
 /// ```
-pub fn channel_bounded<T: Copy + Send>(
+pub fn channel_bounded<T: Pod>(
     capacity: usize,
     watermark: usize,
 ) -> (Publisher<T>, Subscribable<T>) {
@@ -993,7 +994,7 @@ pub fn channel_bounded<T: Copy + Send>(
 /// `latest()`, and `pending()`.
 ///
 /// Created via [`channel_mpmc()`].
-pub struct MpPublisher<T: Copy> {
+pub struct MpPublisher<T: Pod> {
     ring: Arc<SharedRing<T>>,
     /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
     /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
@@ -1007,7 +1008,7 @@ pub struct MpPublisher<T: Copy> {
     next_seq_ptr: *const AtomicU64,
 }
 
-impl<T: Copy> Clone for MpPublisher<T> {
+impl<T: Pod> Clone for MpPublisher<T> {
     fn clone(&self) -> Self {
         MpPublisher {
             ring: self.ring.clone(),
@@ -1021,10 +1022,10 @@ impl<T: Copy> Clone for MpPublisher<T> {
 
 // Safety: MpPublisher uses atomic CAS for all shared state.
 // No mutable fields — all coordination is via atomics on SharedRing.
-unsafe impl<T: Copy + Send> Send for MpPublisher<T> {}
-unsafe impl<T: Copy + Send> Sync for MpPublisher<T> {}
+unsafe impl<T: Pod> Send for MpPublisher<T> {}
+unsafe impl<T: Pod> Sync for MpPublisher<T> {}
 
-impl<T: Copy> MpPublisher<T> {
+impl<T: Pod> MpPublisher<T> {
     /// Publish a single value. Zero-allocation, O(1) amortised.
     ///
     /// Multiple threads may call this concurrently. Each call atomically
@@ -1200,7 +1201,7 @@ impl<T: Copy> MpPublisher<T> {
 /// assert_eq!(sub.try_recv(), Ok(1));
 /// assert_eq!(sub.try_recv(), Ok(2));
 /// ```
-pub fn channel_mpmc<T: Copy + Send>(capacity: usize) -> (MpPublisher<T>, Subscribable<T>) {
+pub fn channel_mpmc<T: Pod>(capacity: usize) -> (MpPublisher<T>, Subscribable<T>) {
     let ring = Arc::new(SharedRing::new_mpmc(capacity));
     let slots_ptr = ring.slots_ptr();
     let mask = ring.mask;

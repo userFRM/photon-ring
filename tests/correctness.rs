@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use photon_ring::{
-    channel, channel_bounded, channel_mpmc, Photon, PublishError, Shutdown, TryRecvError, TypedBus,
+    channel, channel_bounded, channel_mpmc, Photon, Pod, PublishError, Shutdown, TryRecvError,
+    TypedBus,
 };
 
 // -------------------------------------------------------------------------
@@ -257,11 +258,16 @@ fn subscribe_from_oldest_after_overflow() {
 // -------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(C)]
 struct Quote {
     price: f64,
     volume: u64,
     ts: u64,
 }
+
+// SAFETY: Quote is #[repr(C)] with all numeric fields;
+// every bit pattern is a valid Quote.
+unsafe impl Pod for Quote {}
 
 #[test]
 fn struct_payload() {

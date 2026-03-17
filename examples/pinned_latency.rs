@@ -26,11 +26,16 @@ const RING_CAPACITY: usize = 64;
 
 /// A timestamped message for latency measurement.
 #[derive(Debug, Clone, Copy)]
+#[repr(C)]
 #[allow(dead_code)]
 struct TimedMsg {
     seq: u64,
     send_ns: u64,
 }
+
+// SAFETY: TimedMsg is #[repr(C)] with all numeric fields;
+// every bit pattern is a valid TimedMsg.
+unsafe impl photon_ring::Pod for TimedMsg {}
 
 fn main() {
     let cores = affinity::available_cores();

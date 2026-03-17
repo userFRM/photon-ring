@@ -82,6 +82,10 @@ struct TscMsg {
     seq: u64, // sequence for ordering verification
 }
 
+// SAFETY: TscMsg is #[repr(C)] with all numeric fields;
+// every bit pattern is a valid TscMsg.
+unsafe impl photon_ring::Pod for TscMsg {}
+
 fn main() {
     const WARMUP: u64 = 10_000;
     const SAMPLES: u64 = 100_000;

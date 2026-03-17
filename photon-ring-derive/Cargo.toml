@@ -1,0 +1,15 @@
+[package]
+name = "photon-ring-derive"
+version = "2.0.0"
+edition = "2021"
+description = "Derive macro for photon-ring's Pod trait"
+license = "Apache-2.0"
+repository = "https://github.com/userFRM/photon-ring"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

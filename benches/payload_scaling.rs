@@ -21,6 +21,10 @@ struct Pad<const N: usize> {
     data: [u8; N],
 }
 
+// SAFETY: Pad<N> is #[repr(C)] containing only [u8; N];
+// every bit pattern is valid.
+unsafe impl<const N: usize> photon_ring::Pod for Pad<N> {}
+
 // ---------------------------------------------------------------------------
 // Helper: single-thread roundtrip for a given payload size
 // ---------------------------------------------------------------------------

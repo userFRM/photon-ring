@@ -1,6 +1,7 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::pod::Pod;
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::ptr;
@@ -47,7 +48,7 @@ impl<T> Slot<T> {
     }
 }
 
-impl<T: Copy> Slot<T> {
+impl<T: Pod> Slot<T> {
     /// Seqlock write protocol. Single-writer only.
     ///
     /// 1. Store odd stamp (writing)

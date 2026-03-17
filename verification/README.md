@@ -1,3 +1,8 @@
+<!--
+  Copyright 2026 Photon Ring Contributors
+  SPDX-License-Identifier: Apache-2.0
+-->
+
 # Formal Verification: Seqlock-Stamped Ring Buffer
 
 This directory contains a TLA+ specification of the Photon Ring seqlock
@@ -123,13 +128,69 @@ values of all variables.
 
 ## Limitations
 
-- The spec models sequentially consistent memory (TLA+ default). The
-  Rust implementation uses `Acquire`/`Release` orderings, which are
-  weaker. The TLA+ spec therefore over-approximates correctness: if a
-  bug exists under SC, it exists under weaker models too. The converse
-  is not guaranteed -- memory-model-specific bugs (e.g., missing fences
-  on ARM) require tools like LKMM or CDSChecker.
-- The multi-producer (`MpPublisher`) CAS protocol is not modelled. This
-  spec covers the SPMC case only.
-- The `SubscriberGroup` batched fanout is not modelled separately; it
-  uses the same `Slot::try_read` protocol as individual subscribers.
+### SPMC only -- MPMC is not modeled
+
+The TLA+ specification covers the single-producer, multi-consumer (SPMC)
+protocol exclusively. The multi-producer path (`MpPublisher`) uses a
+fundamentally different cursor advancement protocol based on
+`compare_exchange` (CAS) for sequence claiming and stamp-based spin-waiting
+for slot availability. None of this is present in the model. Bugs in the
+MPMC CAS retry loop, ABA hazards, or producer-to-producer ordering would
+not be caught by this specification.
+
+### Sequential consistency, not Acquire/Release
+
+TLA+ models execute under sequential consistency (SC) by default. The
+Rust implementation uses weaker `Acquire`/`Release` orderings (and
+`Relaxed` in some non-critical paths). Under SC, all memory operations
+are globally ordered; under Acquire/Release, independent stores on
+different threads may be observed in different orders by different
+readers.
+
+This means the model is **strictly stronger** than the implementation:
+any safety violation found under SC would also exist under weaker
+orderings. However, the converse does not hold -- the model **cannot
+detect bugs that only manifest under weak memory**, such as:
+
+- A missing `Release` fence allowing a reader to observe a partially
+  written slot despite a valid stamp.
+- Store-buffer forwarding on x86 masking a bug that surfaces on ARM.
+- Compiler reorderings that move a data write past the stamp store.
+
+### Weak memory reordering effects are not modeled
+
+Hardware memory models introduce reorderings that TLA+ does not capture:
+
+- **x86-TSO:** Store-store ordering is preserved, but store-load
+  reordering is possible. The x86 memory model is close to SC for
+  many patterns, which means bugs that would appear on ARM/RISC-V may
+  be invisible on x86 and equally invisible in this TLA+ model.
+- **ARM/AArch64:** Both store-load and store-store reordering are
+  permitted. The seqlock pattern relies on acquire/release fences to
+  prevent the reader from observing stale data after a valid stamp. A
+  missing or misplaced barrier on ARM could cause a torn read that
+  neither x86 testing nor this TLA+ model would detect.
+
+Tools that model weak memory (CDSChecker, GenMC, LKMM/herd7) would be
+needed to verify correctness under these hardware memory models.
+
+### MPMC cursor advancement protocol is not verified
+
+The `MpPublisher` uses a CAS-based sequence claiming protocol:
+
+1. A producer atomically claims the next sequence number via
+   `compare_exchange` on a shared cursor.
+2. It writes the slot data and finalizes the stamp.
+3. Other producers spin-wait on the slot stamp if they claimed a
+   later sequence but an earlier producer has not yet finished writing.
+
+This protocol introduces concerns (CAS retry fairness, livelock under
+high contention, correct stamp-based waiting) that are entirely absent
+from the single-producer model where the writer holds `&mut self` and
+sequence advancement is a plain increment.
+
+### SubscriberGroup
+
+The `SubscriberGroup` batched fanout is not modeled separately. It
+reuses the same `Slot::try_read` protocol as individual subscribers, so
+the existing reader actions cover its correctness at the slot level.

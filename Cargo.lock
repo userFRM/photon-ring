@@ -376,14 +376,24 @@ dependencies = [
 
 [[package]]
 name = "photon-ring"
-version = "1.0.1"
+version = "2.0.0"
 dependencies = [
  "core_affinity2",
  "criterion",
  "disruptor",
  "hashbrown",
  "libc",
+ "photon-ring-derive",
  "spin",
+]
+
+[[package]]
+name = "photon-ring-derive"
+version = "2.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

@@ -8,6 +8,7 @@ use hashbrown::HashMap;
 use spin::Mutex;
 
 use crate::channel::{self, Publisher, Subscribable, Subscriber};
+use crate::pod::Pod;
 
 /// Wrapper that erases the concrete `T` behind `dyn Any` while preserving
 /// the `TypeId` and a human-readable type name for diagnostics.
@@ -18,23 +19,23 @@ struct TopicSlot {
 }
 
 /// The concrete (generic) payload stored inside a [`TopicSlot`].
-struct TypedEntry<T: Copy + Send + 'static> {
+struct TypedEntry<T: Pod> {
     subscribable: Subscribable<T>,
     publisher: Option<Publisher<T>>,
 }
 
-// Safety: `TypedEntry<T>` is `Send + Sync` when `T: Copy + Send + 'static`
+// Safety: `TypedEntry<T>` is `Send + Sync` when `T: Pod`
 // because `Subscribable<T>` is `Send + Sync` and `Publisher<T>` is `Send`.
 // The `Option` wrapper and the fact that the publisher is only accessed
 // under the outer `Mutex` make this safe.
-unsafe impl<T: Copy + Send + 'static> Send for TypedEntry<T> {}
-unsafe impl<T: Copy + Send + 'static> Sync for TypedEntry<T> {}
+unsafe impl<T: Pod> Send for TypedEntry<T> {}
+unsafe impl<T: Pod> Sync for TypedEntry<T> {}
 
 /// A topic bus that supports different message types per topic.
 ///
 /// Unlike [`Photon<T>`](crate::Photon) which requires a single message type
 /// across all topics, `TypedBus` allows each topic to have its own
-/// `T: Copy + Send + 'static`.
+/// `T: Pod`.
 ///
 /// # Example
 ///
@@ -76,7 +77,7 @@ impl TypedBus {
     ///
     /// - Panics if the topic already exists with a different type `T`.
     /// - Panics if the publisher for this topic was already taken.
-    pub fn publisher<T: Copy + Send + 'static>(&self, topic: &str) -> Publisher<T> {
+    pub fn publisher<T: Pod>(&self, topic: &str) -> Publisher<T> {
         let mut topics = self.topics.lock();
         if !topics.contains_key(topic) {
             topics.insert(
@@ -92,12 +93,31 @@ impl TypedBus {
             .unwrap_or_else(|| panic!("publisher already taken for topic '{topic}'"))
     }
 
+    /// Try to take the publisher for a topic. Returns `None` if the
+    /// publisher was already taken.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the topic already exists with a different type `T`.
+    pub fn try_publisher<T: Pod>(&self, topic: &str) -> Option<Publisher<T>> {
+        let mut topics = self.topics.lock();
+        if !topics.contains_key(topic) {
+            topics.insert(
+                topic.to_string(),
+                Self::make_slot::<T>(self.default_capacity),
+            );
+        }
+        let slot = topics.get_mut(topic).unwrap();
+        let entry = Self::downcast_mut::<T>(slot, topic);
+        entry.publisher.take()
+    }
+
     /// Subscribe to a topic (future messages only). Creates the topic if needed.
     ///
     /// # Panics
     ///
     /// Panics if the topic already exists with a different type `T`.
-    pub fn subscribe<T: Copy + Send + 'static>(&self, topic: &str) -> Subscriber<T> {
+    pub fn subscribe<T: Pod>(&self, topic: &str) -> Subscriber<T> {
         let mut topics = self.topics.lock();
         if !topics.contains_key(topic) {
             topics.insert(
@@ -115,7 +135,7 @@ impl TypedBus {
     /// # Panics
     ///
     /// Panics if the topic already exists with a different type `T`.
-    pub fn subscribable<T: Copy + Send + 'static>(&self, topic: &str) -> Subscribable<T> {
+    pub fn subscribable<T: Pod>(&self, topic: &str) -> Subscribable<T> {
         let mut topics = self.topics.lock();
         if !topics.contains_key(topic) {
             topics.insert(
@@ -130,10 +150,7 @@ impl TypedBus {
 
     /// Downcast the erased `TopicSlot` to `TypedEntry<T>`, panicking with a
     /// clear message on type mismatch.
-    fn downcast_mut<'a, T: Copy + Send + 'static>(
-        slot: &'a mut TopicSlot,
-        topic: &str,
-    ) -> &'a mut TypedEntry<T> {
+    fn downcast_mut<'a, T: Pod>(slot: &'a mut TopicSlot, topic: &str) -> &'a mut TypedEntry<T> {
         let requested = TypeId::of::<T>();
         if slot.type_id != requested {
             panic!(
@@ -147,7 +164,7 @@ impl TypedBus {
             .expect("TypeId matched but downcast failed (this is a bug)")
     }
 
-    fn make_slot<T: Copy + Send + 'static>(capacity: usize) -> TopicSlot {
+    fn make_slot<T: Pod>(capacity: usize) -> TopicSlot {
         let (pub_, sub_) = channel::channel::<T>(capacity);
         TopicSlot {
             type_id: TypeId::of::<T>(),

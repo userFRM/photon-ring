@@ -66,6 +66,7 @@
 extern crate std;
 
 use crate::channel::{self, Publisher, Subscribable, Subscriber};
+use crate::pod::Pod;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -117,8 +118,8 @@ fn spawn_stage<T, U>(
     f: impl Fn(T) -> U + Send + 'static,
 ) -> (Arc<AtomicU8>, JoinHandle<()>)
 where
-    T: Copy + Send + 'static,
-    U: Copy + Send + 'static,
+    T: Pod,
+    U: Pod,
 {
     let status = Arc::new(AtomicU8::new(STAGE_RUNNING));
     let status_inner = status.clone();
@@ -273,7 +274,7 @@ impl PipelineBuilder {
     ///
     /// Returns the publisher for writing into the pipeline and a
     /// [`StageBuilder`] for attaching processing stages.
-    pub fn input<T: Copy + Send + 'static>(self) -> (Publisher<T>, StageBuilder<T>) {
+    pub fn input<T: Pod>(self) -> (Publisher<T>, StageBuilder<T>) {
         let (pub_, subs) = channel::channel::<T>(self.capacity);
         let subscriber = subs.subscribe();
         (
@@ -296,14 +297,14 @@ impl PipelineBuilder {
 ///
 /// The type parameter `T` is the output type of the most recently added
 /// stage (or the input type, if no stages have been added yet).
-pub struct StageBuilder<T: Copy + Send + 'static> {
+pub struct StageBuilder<T: Pod> {
     subscriber: Subscriber<T>,
     subscribable: Subscribable<T>,
     capacity: usize,
     state: SharedState,
 }
 
-impl<T: Copy + Send + 'static> StageBuilder<T> {
+impl<T: Pod> StageBuilder<T> {
     /// Add a processing stage that transforms `T -> U`.
     ///
     /// Spawns a dedicated thread that reads from the current stage's
@@ -328,10 +329,7 @@ impl<T: Copy + Send + 'static> StageBuilder<T> {
     /// pipe.shutdown();
     /// pipe.join();
     /// ```
-    pub fn then<U: Copy + Send + 'static>(
-        mut self,
-        f: impl Fn(T) -> U + Send + 'static,
-    ) -> StageBuilder<U> {
+    pub fn then<U: Pod>(mut self, f: impl Fn(T) -> U + Send + 'static) -> StageBuilder<U> {
         let (next_pub, next_subs) = channel::channel::<U>(self.capacity);
         let next_sub = next_subs.subscribe();
 
@@ -383,8 +381,8 @@ impl<T: Copy + Send + 'static> StageBuilder<T> {
         fb: impl Fn(T) -> B + Send + 'static,
     ) -> FanOutBuilder<A, B>
     where
-        A: Copy + Send + 'static,
-        B: Copy + Send + 'static,
+        A: Pod,
+        B: Pod,
     {
         let (pub_a, subs_a) = channel::channel::<A>(self.capacity);
         let (pub_b, subs_b) = channel::channel::<B>(self.capacity);
@@ -442,7 +440,7 @@ impl<T: Copy + Send + 'static> StageBuilder<T> {
 /// to finalize, or chain additional stages on each branch with
 /// [`.then_a()`](FanOutBuilder::then_a) and
 /// [`.then_b()`](FanOutBuilder::then_b).
-pub struct FanOutBuilder<A: Copy + Send + 'static, B: Copy + Send + 'static> {
+pub struct FanOutBuilder<A: Pod, B: Pod> {
     sub_a: Subscriber<A>,
     subs_a: Subscribable<A>,
     sub_b: Subscriber<B>,
@@ -451,7 +449,7 @@ pub struct FanOutBuilder<A: Copy + Send + 'static, B: Copy + Send + 'static> {
     state: SharedState,
 }
 
-impl<A: Copy + Send + 'static, B: Copy + Send + 'static> FanOutBuilder<A, B> {
+impl<A: Pod, B: Pod> FanOutBuilder<A, B> {
     /// Finalize the fan-out pipeline.
     ///
     /// Returns a tuple of `(branch_a_subscriber, branch_b_subscriber)` and
@@ -470,10 +468,7 @@ impl<A: Copy + Send + 'static, B: Copy + Send + 'static> FanOutBuilder<A, B> {
     /// Add a processing stage after branch A.
     ///
     /// Transforms `A -> A2` on a dedicated thread. Branch B is unchanged.
-    pub fn then_a<A2: Copy + Send + 'static>(
-        mut self,
-        f: impl Fn(A) -> A2 + Send + 'static,
-    ) -> FanOutBuilder<A2, B> {
+    pub fn then_a<A2: Pod>(mut self, f: impl Fn(A) -> A2 + Send + 'static) -> FanOutBuilder<A2, B> {
         let (next_pub, next_subs) = channel::channel::<A2>(self.capacity);
         let next_sub = next_subs.subscribe();
 
@@ -494,10 +489,7 @@ impl<A: Copy + Send + 'static, B: Copy + Send + 'static> FanOutBuilder<A, B> {
     /// Add a processing stage after branch B.
     ///
     /// Transforms `B -> B2` on a dedicated thread. Branch A is unchanged.
-    pub fn then_b<B2: Copy + Send + 'static>(
-        mut self,
-        f: impl Fn(B) -> B2 + Send + 'static,
-    ) -> FanOutBuilder<A, B2> {
+    pub fn then_b<B2: Pod>(mut self, f: impl Fn(B) -> B2 + Send + 'static) -> FanOutBuilder<A, B2> {
         let (next_pub, next_subs) = channel::channel::<B2>(self.capacity);
         let next_sub = next_subs.subscribe();
 
@@ -589,34 +581,42 @@ mod tests {
     #[test]
     fn pipeline_type_transform() {
         #[derive(Clone, Copy)]
+        #[repr(C)]
         struct Input {
             value: f64,
         }
+        // SAFETY: Input is #[repr(C)] with a single f64 field;
+        // every bit pattern is a valid f64.
+        unsafe impl crate::Pod for Input {}
 
         #[derive(Clone, Copy, Debug, PartialEq)]
+        #[repr(C)]
         struct Output {
             doubled: f64,
-            positive: bool,
+            positive: u8,
         }
+        // SAFETY: Output is #[repr(C)] with f64 and u8 fields;
+        // every bit pattern is valid.
+        unsafe impl crate::Pod for Output {}
 
         let (mut pub_, stages) = Pipeline::builder().capacity(64).input::<Input>();
 
         let (mut output, pipeline) = stages
             .then(|inp: Input| Output {
                 doubled: inp.value * 2.0,
-                positive: inp.value > 0.0,
+                positive: if inp.value > 0.0 { 1 } else { 0 },
             })
             .build();
 
         pub_.publish(Input { value: 3.5 });
         let out = output.recv();
         assert_eq!(out.doubled, 7.0);
-        assert!(out.positive);
+        assert_eq!(out.positive, 1);
 
         pub_.publish(Input { value: -1.0 });
         let out = output.recv();
         assert_eq!(out.doubled, -2.0);
-        assert!(!out.positive);
+        assert_eq!(out.positive, 0);
 
         pipeline.shutdown();
         pipeline.join();

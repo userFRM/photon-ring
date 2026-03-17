@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy)]
+#[repr(C)]
 #[allow(dead_code)]
 struct Quote {
     symbol_id: u32,
@@ -13,6 +14,10 @@ struct Quote {
     volume: u32,
     ts_ns: u64,
 }
+
+// SAFETY: Quote is #[repr(C)] with all numeric fields;
+// every bit pattern is a valid Quote.
+unsafe impl photon_ring::Pod for Quote {}
 
 fn main() {
     let bus = Photon::<Quote>::new(1024);

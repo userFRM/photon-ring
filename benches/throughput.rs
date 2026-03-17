@@ -138,12 +138,17 @@ fn batch_publish_recv(c: &mut Criterion) {
 }
 
 #[derive(Clone, Copy)]
+#[repr(C)]
 #[allow(dead_code)]
 struct Quote {
     price: f64,
     volume: u64,
     ts: u64,
 }
+
+// SAFETY: Quote is #[repr(C)] with all numeric fields;
+// every bit pattern is a valid Quote.
+unsafe impl photon_ring::Pod for Quote {}
 
 fn struct_roundtrip(c: &mut Criterion) {
     c.bench_function("photon: struct roundtrip (24B)", |b| {
