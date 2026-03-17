@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-03-18
+
+### Added
+- **`#[derive(Message)]` proc macro:** Automatic Pod-compatible wire struct
+  generation from normal Rust structs. Handles `bool` → `u8`, `Option<T>` → `u64`,
+  `#[repr(u8)]` enums → `u8`, `usize` → `u64` transparently. Generates
+  `{Name}Wire` struct + bidirectional `From` conversions + `unsafe impl Pod`.
+- 9 new tests for Message derive (roundtrip, bool, option, enum, arrays, publish).
+
+### Changed
+- Refactored `channel.rs` (1451 lines) into `channel/` module directory (7 files).
+- Refactored `topology.rs` (817 lines) into `topology/` module directory (4 files).
+- No API or behavior changes from the refactor.
+
 ## [2.2.0] - 2026-03-17
 
 ### Added

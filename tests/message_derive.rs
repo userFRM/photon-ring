@@ -1,0 +1,225 @@
+// Copyright 2026 Photon Ring Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+//! Tests for the `Message` derive macro.
+//!
+//! Run with: `cargo test --features derive --test message_derive`
+
+#![cfg(feature = "derive")]
+
+// -------------------------------------------------------------------------
+// Setup: types used in tests
+// -------------------------------------------------------------------------
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Side {
+    Buy = 0,
+    Sell = 1,
+}
+
+#[derive(photon_ring::DeriveMessage)]
+struct Order {
+    price: f64,
+    qty: u32,
+    side: Side,
+    filled: bool,
+    tag: Option<u32>,
+}
+
+// -------------------------------------------------------------------------
+// Wire struct exists and is Pod
+// -------------------------------------------------------------------------
+
+#[test]
+fn wire_struct_is_pod() {
+    fn assert_pod<T: photon_ring::Pod>() {}
+    assert_pod::<OrderWire>();
+}
+
+#[test]
+fn wire_struct_is_copy() {
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<OrderWire>();
+}
+
+// -------------------------------------------------------------------------
+// Round-trip conversions
+// -------------------------------------------------------------------------
+
+#[test]
+fn order_to_wire_and_back() {
+    let order = Order {
+        price: 123.45,
+        qty: 100,
+        side: Side::Buy,
+        filled: true,
+        tag: Some(42),
+    };
+
+    let wire: OrderWire = order.into();
+    assert_eq!(wire.price, 123.45);
+    assert_eq!(wire.qty, 100);
+    assert_eq!(wire.side, 0); // Buy = 0
+    assert_eq!(wire.filled, 1); // true = 1
+    assert_eq!(wire.tag, 42); // Some(42) = 42
+
+    let back: Order = wire.into();
+    assert_eq!(back.price, 123.45);
+    assert_eq!(back.qty, 100);
+    assert_eq!(back.side, Side::Buy);
+    assert!(back.filled);
+    assert_eq!(back.tag, Some(42));
+}
+
+#[test]
+fn bool_false_roundtrip() {
+    let order = Order {
+        price: 0.0,
+        qty: 0,
+        side: Side::Sell,
+        filled: false,
+        tag: None,
+    };
+
+    let wire: OrderWire = order.into();
+    assert_eq!(wire.filled, 0);
+    assert_eq!(wire.side, 1); // Sell = 1
+    assert_eq!(wire.tag, 0); // None = 0
+
+    let back: Order = wire.into();
+    assert!(!back.filled);
+    assert_eq!(back.side, Side::Sell);
+    assert_eq!(back.tag, None);
+}
+
+#[test]
+fn option_none_is_zero() {
+    let order = Order {
+        price: 1.0,
+        qty: 1,
+        side: Side::Buy,
+        filled: false,
+        tag: None,
+    };
+
+    let wire: OrderWire = order.into();
+    assert_eq!(wire.tag, 0);
+
+    let back: Order = wire.into();
+    assert_eq!(back.tag, None);
+}
+
+// -------------------------------------------------------------------------
+// Publish wire struct through a Photon Ring channel
+// -------------------------------------------------------------------------
+
+#[test]
+fn wire_struct_through_channel() {
+    let (mut pub_, subs) = photon_ring::channel::<OrderWire>(4);
+    let mut sub = subs.subscribe();
+
+    let order = Order {
+        price: 99.99,
+        qty: 50,
+        side: Side::Sell,
+        filled: true,
+        tag: Some(7),
+    };
+
+    pub_.publish(order.into());
+    let wire = sub.try_recv().unwrap();
+    let back: Order = wire.into();
+
+    assert_eq!(back.price, 99.99);
+    assert_eq!(back.qty, 50);
+    assert_eq!(back.side, Side::Sell);
+    assert!(back.filled);
+    assert_eq!(back.tag, Some(7));
+}
+
+// -------------------------------------------------------------------------
+// All-numeric struct (passthrough only)
+// -------------------------------------------------------------------------
+
+#[derive(photon_ring::DeriveMessage)]
+struct Tick {
+    bid: f64,
+    ask: f64,
+    volume: u64,
+}
+
+#[test]
+fn all_numeric_passthrough() {
+    let tick = Tick {
+        bid: 1.23,
+        ask: 4.56,
+        volume: 1000,
+    };
+
+    let wire: TickWire = tick.into();
+    assert_eq!(wire.bid, 1.23);
+    assert_eq!(wire.ask, 4.56);
+    assert_eq!(wire.volume, 1000);
+
+    let back: Tick = wire.into();
+    assert_eq!(back.bid, 1.23);
+    assert_eq!(back.ask, 4.56);
+    assert_eq!(back.volume, 1000);
+}
+
+// -------------------------------------------------------------------------
+// usize / isize fields
+// -------------------------------------------------------------------------
+
+#[derive(photon_ring::DeriveMessage)]
+struct Indexed {
+    index: usize,
+    offset: isize,
+    value: u32,
+}
+
+#[test]
+fn usize_isize_conversion() {
+    let src = Indexed {
+        index: 42,
+        offset: -7,
+        value: 100,
+    };
+
+    let wire: IndexedWire = src.into();
+    assert_eq!(wire.index, 42u64);
+    assert_eq!(wire.offset, -7i64);
+    assert_eq!(wire.value, 100);
+
+    let back: Indexed = wire.into();
+    assert_eq!(back.index, 42usize);
+    assert_eq!(back.offset, -7isize);
+    assert_eq!(back.value, 100);
+}
+
+// -------------------------------------------------------------------------
+// Array fields
+// -------------------------------------------------------------------------
+
+#[derive(photon_ring::DeriveMessage)]
+struct WithArray {
+    data: [u8; 4],
+    value: u32,
+}
+
+#[test]
+fn array_passthrough() {
+    let src = WithArray {
+        data: [1, 2, 3, 4],
+        value: 99,
+    };
+
+    let wire: WithArrayWire = src.into();
+    assert_eq!(wire.data, [1, 2, 3, 4]);
+    assert_eq!(wire.value, 99);
+
+    let back: WithArray = wire.into();
+    assert_eq!(back.data, [1, 2, 3, 4]);
+    assert_eq!(back.value, 99);
+}

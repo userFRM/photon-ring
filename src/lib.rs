@@ -88,6 +88,21 @@ pub use ring::Padded;
 /// ```
 #[cfg(feature = "derive")]
 pub use photon_ring_derive::Pod as DerivePod;
+
+/// Derive macro that generates a Pod-compatible wire struct from a domain struct.
+///
+/// Given a struct with `bool`, `Option<numeric>`, `usize`/`isize`, and
+/// `#[repr(u8)]` enum fields, generates `{Name}Wire` plus `From` conversions
+/// in both directions. Requires the `derive` feature.
+///
+/// ```ignore
+/// #[derive(photon_ring::DeriveMessage)]
+/// struct Order { price: f64, side: Side, filled: bool, tag: Option<u32> }
+/// // Generates: OrderWire, From<Order> for OrderWire, From<OrderWire> for Order
+/// ```
+#[cfg(feature = "derive")]
+pub use photon_ring_derive::Message as DeriveMessage;
+
 pub use shutdown::Shutdown;
 pub use typed_bus::TypedBus;
 pub use wait::WaitStrategy;
