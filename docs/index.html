@@ -773,7 +773,7 @@ Write protocol:                Read protocol:
     <h3 class="mb-16" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Hardware</h3>
     <div class="hw-grid mb-32">
       <div class="hw-card">
-        <div class="hw-card-title">Machine A &mdash; Primary</div>
+        <div class="hw-card-title">Intel i7-10700KF &mdash; Primary</div>
         <div class="hw-row"><span class="hw-key">CPU</span><span class="hw-val">Intel Core i7-10700KF</span></div>
         <div class="hw-row"><span class="hw-key">Microarch</span><span class="hw-val">Comet Lake (14 nm)</span></div>
         <div class="hw-row"><span class="hw-key">Cores / Threads</span><span class="hw-val">8C / 16T (SMT on)</span></div>
@@ -783,7 +783,7 @@ Write protocol:                Read protocol:
         <div class="hw-row"><span class="hw-key">Rust</span><span class="hw-val">1.93.1 stable</span></div>
       </div>
       <div class="hw-card">
-        <div class="hw-card-title">Machine B &mdash; Secondary</div>
+        <div class="hw-card-title">Apple M1 Pro &mdash; Secondary</div>
         <div class="hw-row"><span class="hw-key">CPU</span><span class="hw-val">Apple M1 Pro</span></div>
         <div class="hw-row"><span class="hw-key">Architecture</span><span class="hw-val">aarch64 (ARMv8.5-A)</span></div>
         <div class="hw-row"><span class="hw-key">Cores</span><span class="hw-val">8 (6P + 2E)</span></div>
@@ -905,7 +905,7 @@ Write protocol:                Read protocol:
     <!-- Charts -->
     <div class="chart-row" style="margin-top:40px;">
       <div class="chart-card">
-        <div class="chart-title">One-way Latency Distribution (RDTSC, Intel A)</div>
+        <div class="chart-title">One-way Latency Distribution (RDTSC, Intel i7-10700KF)</div>
         <div class="chart-sub">Message count per latency bucket &mdash; Photon Ring vs disruptor-rs (estimated)</div>
         <div class="chart-container">
           <canvas id="latencyHistogram"></canvas>
@@ -930,7 +930,7 @@ Write protocol:                Read protocol:
       </div>
       <div class="chart-card">
         <div class="chart-title">One-way Latency Percentiles (RDTSC)</div>
-        <div class="chart-sub">p50, p90, p99, p99.9 on Intel A (x86_64)</div>
+        <div class="chart-sub">p50, p90, p99, p99.9 on Intel i7-10700KF (x86_64)</div>
         <div class="chart-container">
           <canvas id="percentilesBar"></canvas>
         </div>
@@ -951,12 +951,12 @@ Write protocol:                Read protocol:
         </thead>
         <tbody>
           <tr>
-            <td class="td-label">Intel i7-10700KF (Machine A)</td>
+            <td class="td-label">Intel i7-10700KF (Intel i7-10700KF)</td>
             <td class="td-best">~300M msg/s</td>
             <td class="text-dim" style="font-size:0.85rem;">BusySpin, 4096 slots, u64 payload</td>
           </tr>
           <tr>
-            <td class="td-label">Apple M1 Pro (Machine B)</td>
+            <td class="td-label">Apple M1 Pro (Apple M1 Pro)</td>
             <td class="td-best">~88M msg/s</td>
             <td class="text-dim" style="font-size:0.85rem;">BusySpin, 4096 slots, u64 payload</td>
           </tr>

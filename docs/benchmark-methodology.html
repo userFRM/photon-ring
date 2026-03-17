@@ -91,7 +91,7 @@
 
     <h2>Hardware</h2>
 
-    <h3>Machine A (primary)</h3>
+    <h3>Intel i7-10700KF (primary)</h3>
     <div class="table-wrapper">
       <table>
         <thead><tr><th>Property</th><th>Value</th></tr></thead>
@@ -110,7 +110,7 @@
       </table>
     </div>
 
-    <h3>Machine B (secondary)</h3>
+    <h3>Apple M1 Pro (secondary)</h3>
     <div class="table-wrapper">
       <table>
         <thead><tr><th>Property</th><th>Value</th></tr></thead>
@@ -149,7 +149,7 @@
 
     <ul style="margin-left:24px;margin-bottom:16px;">
       <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">CPU frequency governor.</strong> Left at OS default. Turbo boost is not disabled.</li>
-      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">SMT (Hyper-Threading).</strong> Enabled on Machine A. Cross-thread benchmarks may land on sibling hyperthreads or separate physical cores, which dramatically changes latency.</li>
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">SMT (Hyper-Threading).</strong> Enabled on Intel i7-10700KF. Cross-thread benchmarks may land on sibling hyperthreads or separate physical cores, which dramatically changes latency.</li>
       <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">Core isolation.</strong> No <code>isolcpus</code>, <code>nohz_full</code>, or <code>rcu_nocbs</code> kernel parameters are set.</li>
       <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">Core pinning.</strong> Criterion benchmarks do not pin threads. The <code>rdtsc_oneway</code> bench and the <code>pinned_latency</code> example do use core pinning where noted.</li>
       <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">Background load.</strong> Benchmarks run on a developer workstation, not a dedicated bare-metal machine.</li>

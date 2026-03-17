@@ -159,7 +159,7 @@
     </div>
 
     <div class="chart-card">
-      <div class="chart-title">Cross-Thread Latency vs Payload Size (Intel A)</div>
+      <div class="chart-title">Cross-Thread Latency vs Payload Size (Intel i7-10700KF)</div>
       <div class="chart-sub">Photon Ring vs modeled disruptor-rs baseline. Log x-axis.</div>
       <div class="chart-container">
         <canvas id="payloadChart"></canvas>
@@ -216,7 +216,7 @@ python3 scripts/plot_payload_scaling.py</pre>
       labels: payloads,
       datasets: [
         {
-          label: 'Photon Ring (Intel A)',
+          label: 'Photon Ring (Intel i7-10700KF)',
           data: photon,
           borderColor: 'rgba(88,166,255,0.9)',
           backgroundColor: 'rgba(88,166,255,0.12)',
@@ -227,7 +227,7 @@ python3 scripts/plot_payload_scaling.py</pre>
           borderWidth: 2,
         },
         {
-          label: 'disruptor-rs (modeled, Intel A)',
+          label: 'disruptor-rs (modeled, Intel i7-10700KF)',
           data: disrupt,
           borderColor: 'rgba(227,179,65,0.85)',
           backgroundColor: 'rgba(227,179,65,0.08)',
