@@ -145,15 +145,6 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
   One-way latency (RDTSC)             48 ns p50     —
 ```
 
-### Latency distribution
-
-100,000 cross-thread roundtrip samples on Intel i7-10700KF, no core pinning:
-
-![Latency histogram](docs/images/latency-histogram.png)
-
-Photon Ring: **99.9% of samples in the 96-128 ns bucket** (p50 = 107 ns, p99 = 116 ns).
-crossbeam-channel spreads across 128-256 ns (p50 = 193 ns, p99 = 250 ns).
-
 ### Throughput
 
 - **Sustained throughput:** about 300M msg/s on Intel and 88M msg/s on M1 Pro

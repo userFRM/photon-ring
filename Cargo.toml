@@ -28,6 +28,7 @@ core_affinity2 = "0.15.4"
 
 [dev-dependencies]
 criterion = "0.8.2"
+crossbeam-channel = "0.5"
 disruptor = "4.0.0"
 
 [[example]]
@@ -61,3 +62,4 @@ harness = false
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 targets = ["x86_64-unknown-linux-gnu"]
+
