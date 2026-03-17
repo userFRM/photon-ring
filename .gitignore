@@ -2,3 +2,4 @@
 *.o
 *.d
 rust_out
+photon-ring-derive/target/
