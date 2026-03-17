@@ -1,0 +1,1680 @@
+<!--
+  Copyright 2026 Photon Ring Contributors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Photon Ring &mdash; Seqlock-Stamped Inter-Thread Messaging for Rust</title>
+  <meta name="description" content="Ultra-low-latency SPMC/MPMC pub/sub using seqlock-stamped ring buffers. Zero-allocation, no_std compatible, 48 ns one-way latency.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x2299;</text></svg>">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <style>
+    /* ---------- Reset & Base ---------- */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0d1117;
+      --bg-surface:  #161b22;
+      --bg-raised:   #1c2128;
+      --border:      #30363d;
+      --border-dim:  #21262d;
+      --text:        #c9d1d9;
+      --text-dim:    #8b949e;
+      --text-bright: #f0f6fc;
+      --accent:      #58a6ff;
+      --accent-dim:  #1f6feb;
+      --accent-glow: rgba(88, 166, 255, 0.15);
+      --green:       #3fb950;
+      --amber:       #e3b341;
+      --red:         #f85149;
+      --purple:      #bc8cff;
+      --teal:        #39d353;
+      --radius:      6px;
+      --radius-lg:   10px;
+      --mono:        "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ---------- Layout ---------- */
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    section {
+      padding: 72px 0;
+      border-bottom: 1px solid var(--border-dim);
+    }
+    section:last-of-type { border-bottom: none; }
+
+    .section-title {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: var(--text-bright);
+      margin-bottom: 8px;
+    }
+
+    .section-sub {
+      color: var(--text-dim);
+      font-size: 1rem;
+      margin-bottom: 40px;
+    }
+
+    /* ---------- Navigation ---------- */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(13, 17, 23, 0.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 56px;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    .nav-brand {
+      font-weight: 700;
+      font-size: 1rem;
+      color: var(--text-bright);
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-decoration: none;
+    }
+    .nav-brand:hover { text-decoration: none; color: var(--accent); }
+
+    .nav-ring {
+      font-size: 1.3rem;
+      line-height: 1;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 4px;
+      margin-left: auto;
+      list-style: none;
+    }
+
+    .nav-links a {
+      padding: 6px 12px;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      color: var(--text-dim);
+      transition: color 0.15s, background 0.15s;
+      white-space: nowrap;
+    }
+    .nav-links a:hover {
+      color: var(--text-bright);
+      background: var(--bg-raised);
+      text-decoration: none;
+    }
+
+    /* ---------- Hero ---------- */
+    #hero {
+      padding: 64px 0 56px;
+      text-align: center;
+      border-bottom: 1px solid var(--border-dim);
+    }
+
+    .hero-banner {
+      width: 100%;
+      max-width: 900px;
+      border-radius: var(--radius-lg);
+      margin-bottom: 36px;
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .hero-title {
+      font-size: 3rem;
+      font-weight: 800;
+      color: var(--text-bright);
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin-bottom: 16px;
+    }
+
+    .hero-subtitle {
+      font-size: 1.25rem;
+      color: var(--text-dim);
+      margin-bottom: 28px;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 36px;
+    }
+
+    .badges img {
+      height: 20px;
+    }
+
+    .hero-stats {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+
+    .hero-stat {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 16px 24px;
+      text-align: center;
+      min-width: 140px;
+    }
+
+    .hero-stat-value {
+      font-size: 1.8rem;
+      font-weight: 800;
+      color: var(--accent);
+      font-family: var(--mono);
+      line-height: 1.1;
+    }
+
+    .hero-stat-label {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* ---------- Feature Cards ---------- */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+
+    .feature-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      transition: border-color 0.2s;
+    }
+    .feature-card:hover { border-color: var(--accent-dim); }
+
+    .feature-icon {
+      font-size: 1.5rem;
+      margin-bottom: 12px;
+      line-height: 1;
+    }
+
+    .feature-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-bright);
+      margin-bottom: 8px;
+    }
+
+    .feature-desc {
+      font-size: 0.875rem;
+      color: var(--text-dim);
+      line-height: 1.5;
+    }
+
+    /* ---------- Slot Diagram ---------- */
+    .slot-diagram {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px 32px;
+      margin-bottom: 24px;
+      overflow-x: auto;
+    }
+
+    .slot-diagram pre {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--text);
+      line-height: 1.6;
+      white-space: pre;
+    }
+
+    /* ---------- Tables ---------- */
+    .table-wrapper {
+      overflow-x: auto;
+      margin: 24px 0;
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    thead th {
+      background: var(--bg-raised);
+      color: var(--text-bright);
+      font-weight: 600;
+      padding: 12px 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    tbody tr:nth-child(even) { background: var(--bg-surface); }
+    tbody tr:hover { background: var(--bg-raised); }
+
+    tbody td {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border-dim);
+      vertical-align: top;
+    }
+    tbody tr:last-child td { border-bottom: none; }
+
+    .td-num {
+      font-family: var(--mono);
+      font-size: 0.875rem;
+      white-space: nowrap;
+    }
+
+    .td-best {
+      color: var(--green);
+      font-weight: 600;
+      font-family: var(--mono);
+      font-size: 0.875rem;
+    }
+
+    .td-label {
+      color: var(--text-bright);
+      font-weight: 600;
+    }
+
+    .badge-yes  { color: var(--green);  font-weight: 700; }
+    .badge-no   { color: var(--text-dim); }
+    .badge-opt  { color: var(--amber);  font-size: 0.8rem; }
+
+    /* ---------- Code Blocks ---------- */
+    .code-block {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow-x: auto;
+      margin: 20px 0;
+    }
+
+    .code-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+
+    .code-lang {
+      display: inline-block;
+      background: var(--bg-raised);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 0.75rem;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .code-block pre {
+      padding: 20px 24px;
+      font-family: var(--mono);
+      font-size: 0.875rem;
+      line-height: 1.65;
+      overflow-x: auto;
+      color: var(--text);
+    }
+
+    /* minimal Rust token colouring */
+    .kw   { color: #ff7b72; }   /* keywords */
+    .ty   { color: #ffa657; }   /* types / traits */
+    .fn_  { color: #d2a8ff; }   /* function names */
+    .str  { color: #a5d6ff; }   /* string literals */
+    .cmt  { color: #6e7681; font-style: italic; } /* comments */
+    .num  { color: #79c0ff; }   /* numbers */
+    .mac  { color: #e3b341; }   /* macros */
+
+    /* ---------- Charts ---------- */
+    .chart-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin: 32px 0;
+    }
+
+    @media (max-width: 720px) {
+      .chart-row { grid-template-columns: 1fr; }
+    }
+
+    .chart-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+    }
+
+    .chart-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text-bright);
+      margin-bottom: 6px;
+    }
+
+    .chart-sub {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      margin-bottom: 16px;
+    }
+
+    .chart-container {
+      position: relative;
+      height: 260px;
+    }
+
+    /* ---------- Hardware Spec ---------- */
+    .hw-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 36px;
+    }
+
+    @media (max-width: 680px) {
+      .hw-grid { grid-template-columns: 1fr; }
+    }
+
+    .hw-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px 24px;
+    }
+
+    .hw-card-title {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-dim);
+      margin-bottom: 14px;
+      font-weight: 600;
+    }
+
+    .hw-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 5px 0;
+      border-bottom: 1px solid var(--border-dim);
+      font-size: 0.875rem;
+    }
+    .hw-row:last-child { border-bottom: none; }
+    .hw-key { color: var(--text-dim); flex-shrink: 0; }
+    .hw-val { color: var(--text-bright); text-align: right; font-family: var(--mono); font-size: 0.83rem; }
+
+    /* ---------- Callout ---------- */
+    .callout {
+      background: var(--bg-surface);
+      border-left: 3px solid var(--accent);
+      border-radius: 0 var(--radius) var(--radius) 0;
+      padding: 14px 18px;
+      font-size: 0.9rem;
+      color: var(--text-dim);
+      margin: 20px 0;
+    }
+    .callout strong { color: var(--text-bright); }
+
+    .callout-warn {
+      border-left-color: var(--amber);
+    }
+
+    /* ---------- Payload Image ---------- */
+    .payload-img {
+      width: 100%;
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border);
+      display: block;
+      margin: 24px 0;
+    }
+
+    /* ---------- Get Started ---------- */
+    .install-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+
+    .install-card h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-bright);
+      margin-bottom: 14px;
+    }
+
+    .step-list {
+      list-style: none;
+      counter-reset: steps;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .step-list li {
+      counter-increment: steps;
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      font-size: 0.9rem;
+    }
+
+    .step-list li::before {
+      content: counter(steps);
+      background: var(--accent-dim);
+      color: var(--text-bright);
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 700;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    /* ---------- Footer ---------- */
+    footer {
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 0.875rem;
+    }
+
+    footer a { color: var(--text-dim); }
+    footer a:hover { color: var(--accent); }
+
+    .footer-links {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 20px;
+      margin-bottom: 16px;
+    }
+
+    /* ---------- Responsive ---------- */
+    @media (max-width: 700px) {
+      .hero-title { font-size: 2rem; }
+      .hero-subtitle { font-size: 1rem; }
+      .chart-row { grid-template-columns: 1fr; }
+      .nav-links { display: none; }
+    }
+
+    /* ---------- Misc helpers ---------- */
+    .text-mono { font-family: var(--mono); }
+    .text-dim  { color: var(--text-dim); }
+    .text-green { color: var(--green); }
+    .text-amber { color: var(--amber); }
+    .mt-0 { margin-top: 0; }
+    .mb-8 { margin-bottom: 8px; }
+    .mb-16 { margin-bottom: 16px; }
+    .mb-24 { margin-bottom: 24px; }
+    .mb-32 { margin-bottom: 32px; }
+
+    code {
+      font-family: var(--mono);
+      font-size: 0.875em;
+      background: var(--bg-raised);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--accent);
+    }
+
+    .note-inline {
+      font-size: 0.82rem;
+      color: var(--text-dim);
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- =========================================================
+     NAV
+     ========================================================= -->
+<nav>
+  <div class="nav-inner">
+    <a class="nav-brand" href="#">
+      <span class="nav-ring">&#x2299;</span>
+      Photon Ring
+    </a>
+    <ul class="nav-links">
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#benchmarks">Benchmarks</a></li>
+      <li><a href="#comparison">Comparison</a></li>
+      <li><a href="#api">API</a></li>
+      <li><a href="#get-started">Get Started</a></li>
+      <li><a href="https://docs.rs/photon-ring" target="_blank" rel="noopener">docs.rs &#x2197;</a></li>
+      <li><a href="https://github.com/userFRM/photon-ring" target="_blank" rel="noopener">GitHub &#x2197;</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- =========================================================
+     HERO
+     ========================================================= -->
+<section id="hero">
+  <div class="container">
+    <img
+      class="hero-banner"
+      src="images/banner.jpg"
+      alt="Photon Ring banner"
+    >
+    <h1 class="hero-title">Photon Ring</h1>
+    <p class="hero-subtitle">
+      Seqlock-stamped inter-thread messaging for Rust.
+      Zero-allocation broadcast channels at near-hardware latency.
+    </p>
+
+    <div class="badges">
+      <a href="https://crates.io/crates/photon-ring" target="_blank" rel="noopener">
+        <img src="https://img.shields.io/crates/v/photon-ring.svg" alt="crates.io">
+      </a>
+      <a href="https://docs.rs/photon-ring" target="_blank" rel="noopener">
+        <img src="https://docs.rs/photon-ring/badge.svg" alt="docs.rs">
+      </a>
+      <a href="LICENSE-APACHE" target="_blank" rel="noopener">
+        <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License">
+      </a>
+      <img src="https://img.shields.io/badge/no__std-compatible-brightgreen.svg" alt="no_std">
+      <a href="https://github.com/userFRM/photon-ring/actions/workflows/ci.yml" target="_blank" rel="noopener">
+        <img src="https://github.com/userFRM/photon-ring/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI">
+      </a>
+    </div>
+
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <div class="hero-stat-value">48 ns</div>
+        <div class="hero-stat-label">p50 one-way latency</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-value">2.8 ns</div>
+        <div class="hero-stat-label">publish cost (Intel)</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-value">300M</div>
+        <div class="hero-stat-label">msg/s sustained</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-value">0 alloc</div>
+        <div class="hero-stat-label">on hot path</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     OVERVIEW
+     ========================================================= -->
+<section id="overview">
+  <div class="container">
+    <h2 class="section-title">Overview</h2>
+    <p class="section-sub">How Photon Ring achieves near-hardware latency</p>
+
+    <p style="margin-bottom:16px;">
+      Photon Ring is a zero-allocation pub/sub crate for Rust built around pre-allocated ring buffers
+      with per-slot seqlock stamps. It targets the part of concurrent systems where queueing overhead
+      dominates: market data, telemetry fanout, staged pipelines, and other hot-path broadcast workloads
+      where every subscriber must observe every message.
+    </p>
+    <p style="margin-bottom:32px;">
+      The central insight is <strong style="color:var(--text-bright);">stamp-in-slot co-location</strong>:
+      by embedding the seqlock sequence stamp directly alongside the payload in one
+      <code>#[repr(C, align(64))]</code> struct, both ownership metadata and data reside
+      within a single 64-byte cache line for payloads up to 56 bytes. Consumers validate
+      and read in one L3 snoop instead of two, cutting coherence traffic in half.
+    </p>
+
+    <h3 style="color:var(--text-bright);margin-bottom:16px;font-size:1rem;font-weight:600;">Slot layout</h3>
+    <div class="slot-diagram">
+<pre>                    64 bytes (one cache line)
++-----------------------------------------------------------+
+|  stamp: AtomicU64  |  value: T                            |
+|  (seqlock)         |  (Pod &mdash; all bit patterns valid)      |
++-----------------------------------------------------------+
+For T &lt;= 56 bytes: stamp and value share one cache line.
+Larger T spills to additional lines (still correct, slightly slower).
+
+Write protocol:                Read protocol:
+  stamp = seq*2 + 1 (odd)       s1 = stamp.load(Acquire)
+  fence(Release)                 if odd  &rarr; spin
+  memcpy(slot.value, data)       if s1 &lt; expected &rarr; Empty
+  stamp = seq*2 + 2 (even)       if s1 &gt; expected &rarr; Lagged
+  cursor = seq (Release)         value = memcpy(slot)
+                                 s2 = stamp.load(Acquire)
+                                 if s1 == s2 &rarr; return value
+                                 else &rarr; retry</pre>
+    </div>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon">&#x26A1;</div>
+        <div class="feature-title">Near-hardware latency</div>
+        <div class="feature-desc">
+          48 ns p50 one-way latency on Intel i7-10700KF &mdash; within 20% of
+          the bare L3 snoop floor, leaving almost no software overhead.
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1F4E1;</div>
+        <div class="feature-title">True broadcast</div>
+        <div class="feature-desc">
+          Every subscriber sees every message. Fanout to 10 independent
+          subscribers costs 17 ns total (Intel) &mdash; 1.7 ns per subscriber.
+          <code>SubscriberGroup</code> batches N logical consumers into a
+          single seqlock read, cutting that to 0.2 ns each.
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1F9F0;</div>
+        <div class="feature-title">Zero allocation on the hot path</div>
+        <div class="feature-desc">
+          The ring is pre-allocated at construction. <code>publish</code> and
+          <code>try_recv</code> never touch the allocator &mdash;
+          no GC pauses, no malloc jitter.
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1F9EA;</div>
+        <div class="feature-title">Pod payload safety</div>
+        <div class="feature-desc">
+          Requires <code>T: Pod</code> (every bit pattern valid), making
+          speculative torn reads safe to discard. Compile-time proof,
+          not a runtime check.
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x2699;</div>
+        <div class="feature-title">SPMC and MPMC</div>
+        <div class="feature-desc">
+          <code>Publisher</code> is single-producer via <code>&amp;mut self</code>
+          (no CAS on write). <code>MpPublisher</code> adds a lock-free multi-producer
+          path. Named-topic <code>Photon&lt;T&gt;</code> and heterogeneous
+          <code>TypedBus</code> included.
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1F310;</div>
+        <div class="feature-title">no_std + alloc</div>
+        <div class="feature-desc">
+          Works on bare metal, WASM, and embedded targets with
+          <code>alloc</code>. Pipeline topology builder, hugepages, and CPU
+          affinity are available on supported desktop/server platforms.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     BENCHMARKS
+     ========================================================= -->
+<section id="benchmarks">
+  <div class="container">
+    <h2 class="section-title">Benchmarks</h2>
+    <p class="section-sub">
+      Criterion (100 samples, --release, no custom RUSTFLAGS) on two machines.
+      Numbers are medians unless stated.
+    </p>
+
+    <!-- Hardware -->
+    <h3 class="mb-16" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Hardware</h3>
+    <div class="hw-grid mb-32">
+      <div class="hw-card">
+        <div class="hw-card-title">Machine A &mdash; Primary</div>
+        <div class="hw-row"><span class="hw-key">CPU</span><span class="hw-val">Intel Core i7-10700KF</span></div>
+        <div class="hw-row"><span class="hw-key">Microarch</span><span class="hw-val">Comet Lake (14 nm)</span></div>
+        <div class="hw-row"><span class="hw-key">Cores / Threads</span><span class="hw-val">8C / 16T (SMT on)</span></div>
+        <div class="hw-row"><span class="hw-key">Base / Turbo</span><span class="hw-val">3.80 GHz / 5.10 GHz</span></div>
+        <div class="hw-row"><span class="hw-key">L1d / L2 / L3</span><span class="hw-val">32 KB / 256 KB / 16 MB</span></div>
+        <div class="hw-row"><span class="hw-key">OS</span><span class="hw-val">Linux 6.8 (Ubuntu)</span></div>
+        <div class="hw-row"><span class="hw-key">Rust</span><span class="hw-val">1.93.1 stable</span></div>
+      </div>
+      <div class="hw-card">
+        <div class="hw-card-title">Machine B &mdash; Secondary</div>
+        <div class="hw-row"><span class="hw-key">CPU</span><span class="hw-val">Apple M1 Pro</span></div>
+        <div class="hw-row"><span class="hw-key">Architecture</span><span class="hw-val">aarch64 (ARMv8.5-A)</span></div>
+        <div class="hw-row"><span class="hw-key">Cores</span><span class="hw-val">8 (6P + 2E)</span></div>
+        <div class="hw-row"><span class="hw-key">L1d (P-core)</span><span class="hw-val">128 KB</span></div>
+        <div class="hw-row"><span class="hw-key">L2</span><span class="hw-val">12 MB (P-cluster)</span></div>
+        <div class="hw-row"><span class="hw-key">OS</span><span class="hw-val">macOS 26.3</span></div>
+        <div class="hw-row"><span class="hw-key">Rust</span><span class="hw-val">1.92.0 stable</span></div>
+      </div>
+    </div>
+
+    <!-- Core operations table -->
+    <h3 class="mb-8" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Core operations</h3>
+    <p class="note-inline mb-16">
+      Compared against <a href="https://crates.io/crates/disruptor" target="_blank" rel="noopener">disruptor v4.0.0</a>
+      (BusySpin wait, 4096-slot ring, same binary, same Criterion invocation).
+    </p>
+    <div class="table-wrapper mb-32">
+      <table>
+        <thead>
+          <tr>
+            <th>Operation</th>
+            <th>Photon Ring (A)</th>
+            <th>Photon Ring (B)</th>
+            <th>disruptor-rs (A)</th>
+            <th>disruptor-rs (B)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td-label">Publish only</td>
+            <td class="td-best">2.8 ns</td>
+            <td class="td-best">2.4 ns</td>
+            <td class="td-num">30.6 ns</td>
+            <td class="td-num">15.3 ns</td>
+          </tr>
+          <tr>
+            <td class="td-label">Cross-thread roundtrip</td>
+            <td class="td-best">95 ns</td>
+            <td class="td-best">130 ns</td>
+            <td class="td-num">138 ns</td>
+            <td class="td-num">186 ns</td>
+          </tr>
+          <tr>
+            <td class="td-label">Same-thread roundtrip (1 sub)</td>
+            <td class="td-best">2.7 ns</td>
+            <td class="td-best">8.8 ns</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+          <tr>
+            <td class="td-label">Fanout (10 subscribers)</td>
+            <td class="td-best">17.0 ns</td>
+            <td class="td-best">27.7 ns</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+          <tr>
+            <td class="td-label">SubscriberGroup read</td>
+            <td class="td-best">2.6 ns</td>
+            <td class="td-best">8.8 ns</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+          <tr>
+            <td class="td-label">MPMC (1 pub + 1 sub)</td>
+            <td class="td-num">12.1 ns</td>
+            <td class="td-num">10.6 ns</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+          <tr>
+            <td class="td-label">Empty poll</td>
+            <td class="td-best">0.85 ns</td>
+            <td class="td-num">1.1 ns</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+          <tr>
+            <td class="td-label">Batch publish 64 + drain</td>
+            <td class="td-num">158 ns</td>
+            <td class="td-num">282 ns</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+          <tr>
+            <td class="td-label">Struct roundtrip (24-byte Pod)</td>
+            <td class="td-num">4.8 ns</td>
+            <td class="td-num">9.3 ns</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+          <tr>
+            <td class="td-label">One-way latency p50 (RDTSC)</td>
+            <td class="td-best">48 ns</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+          <tr>
+            <td class="td-label">Sustained throughput</td>
+            <td class="td-best">~300M msg/s</td>
+            <td class="td-best">~88M msg/s</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <strong>disruptor-rs comparison note:</strong>
+      Both libraries use BusySpin wait strategy and 4096-slot rings. The Disruptor
+      benchmarks run in the same Criterion binary, compiled with identical flags.
+      Cross-thread Disruptor numbers are not available because its consumer thread
+      is managed internally by the builder API.
+      See <a href="benchmark-methodology.html">benchmark methodology</a> for full details.
+    </div>
+
+    <!-- Charts -->
+    <div class="chart-row" style="margin-top:40px;">
+      <div class="chart-card">
+        <div class="chart-title">One-way Latency Distribution (RDTSC, Intel A)</div>
+        <div class="chart-sub">Message count per latency bucket &mdash; Photon Ring vs disruptor-rs (estimated)</div>
+        <div class="chart-container">
+          <canvas id="latencyHistogram"></canvas>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Publish Latency Comparison</div>
+        <div class="chart-sub">Publish-only cost in nanoseconds, same Criterion run</div>
+        <div class="chart-container">
+          <canvas id="publishBar"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-row">
+      <div class="chart-card">
+        <div class="chart-title">Cross-Thread Roundtrip</div>
+        <div class="chart-sub">Publisher &rarr; subscriber &rarr; signal-back, two machines</div>
+        <div class="chart-container">
+          <canvas id="roundtripBar"></canvas>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">One-way Latency Percentiles (RDTSC)</div>
+        <div class="chart-sub">p50, p90, p99, p99.9 on Intel A (x86_64)</div>
+        <div class="chart-container">
+          <canvas id="percentilesBar"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Throughput section -->
+    <h3 style="color:var(--text-bright);font-size:1rem;font-weight:600;margin-top:40px;margin-bottom:8px;">Throughput</h3>
+    <p class="note-inline mb-16">Sustained message rate, single publisher, single subscriber, BusySpin.</p>
+    <div class="table-wrapper mb-24">
+      <table>
+        <thead>
+          <tr>
+            <th>Machine</th>
+            <th>Throughput</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td-label">Intel i7-10700KF (Machine A)</td>
+            <td class="td-best">~300M msg/s</td>
+            <td class="text-dim" style="font-size:0.85rem;">BusySpin, 4096 slots, u64 payload</td>
+          </tr>
+          <tr>
+            <td class="td-label">Apple M1 Pro (Machine B)</td>
+            <td class="td-best">~88M msg/s</td>
+            <td class="text-dim" style="font-size:0.85rem;">BusySpin, 4096 slots, u64 payload</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Payload scaling -->
+    <h3 style="color:var(--text-bright);font-size:1rem;font-weight:600;margin-bottom:8px;">Payload scaling</h3>
+    <p class="note-inline mb-16">
+      Photon Ring outperforms disruptor-rs at every payload size tested (8 B &ndash; 4 KiB).
+      See <a href="payload-scaling.html">full payload scaling analysis</a>.
+    </p>
+    <img
+      class="payload-img"
+      src="images/payload-scaling.png"
+      alt="Payload scaling chart: Photon Ring vs disruptor-rs across 8B-4KiB payloads"
+    >
+
+    <div class="callout callout-warn" style="margin-top:0;">
+      <strong>Reproducibility:</strong> Numbers use <code>T: Pod</code> payloads and no custom RUSTFLAGS.
+      CPU governor, Turbo Boost, SMT, and core pinning are not controlled in the Criterion suite.
+      Run <code>cargo bench</code> on your own hardware and treat published figures as indicative snapshots.
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     COMPARISON
+     ========================================================= -->
+<section id="comparison">
+  <div class="container">
+    <h2 class="section-title">Comparison</h2>
+    <p class="section-sub">How Photon Ring fits alongside the broader Rust concurrency ecosystem</p>
+
+    <!-- Feature matrix -->
+    <h3 class="mb-16" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Feature matrix</h3>
+    <div class="table-wrapper mb-32">
+      <table>
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>Photon Ring</th>
+            <th>disruptor-rs v4</th>
+            <th>crossbeam-channel</th>
+            <th>bus</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td-label">Delivery model</td>
+            <td>Broadcast</td>
+            <td>Broadcast</td>
+            <td>Point-to-point queue</td>
+            <td>Broadcast</td>
+          </tr>
+          <tr>
+            <td class="td-label">Publish cost</td>
+            <td class="td-best">2.8 ns / 12.1 ns (MPMC)</td>
+            <td class="td-num">30.6 ns</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+          <tr>
+            <td class="td-label">Cross-thread roundtrip</td>
+            <td class="td-best">95 ns</td>
+            <td class="td-num">138 ns</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+          <tr>
+            <td class="td-label">Sustained throughput</td>
+            <td class="td-best">~300M msg/s</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+            <td class="td-num">&mdash;</td>
+          </tr>
+          <tr>
+            <td class="td-label">Topology / pipeline builder</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td class="td-label">Batch publish &amp; drain</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-opt">Iterator only</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td class="td-label">Named-topic bus</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td class="td-label">Heterogeneous-type bus</td>
+            <td><span class="badge-yes">Yes (TypedBus)</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td class="td-label">Backpressure</td>
+            <td><span class="badge-opt">Optional</span></td>
+            <td><span class="badge-yes">Default</span></td>
+            <td><span class="badge-yes">Default</span></td>
+            <td><span class="badge-yes">Default</span></td>
+          </tr>
+          <tr>
+            <td class="td-label">no_std compatible</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td class="td-label">Multi-producer (MPMC)</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td class="td-label">CPU affinity helpers</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td class="td-label">Hugepages / mlock</td>
+            <td><span class="badge-opt">Linux only</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td class="td-label">Lazy drop on overflow</td>
+            <td><span class="badge-yes">Yes (lossy default)</span></td>
+            <td><span class="badge-no">Blocks</span></td>
+            <td><span class="badge-no">Blocks or drops</span></td>
+            <td><span class="badge-no">Blocks</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Design constraints -->
+    <h3 class="mb-16" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Design constraints</h3>
+    <div class="table-wrapper mb-24">
+      <table>
+        <thead>
+          <tr>
+            <th>Constraint</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td-label">T: Pod</td>
+            <td>Every bit pattern must be valid. Torn reads from speculative seqlock copies are safe to reject without UB.</td>
+          </tr>
+          <tr>
+            <td class="td-label">Power-of-two capacity</td>
+            <td>Indexing uses <code>seq &amp; mask</code> instead of <code>%</code>, avoiding division on the hot path.</td>
+          </tr>
+          <tr>
+            <td class="td-label">Single producer by default</td>
+            <td><code>&amp;mut self</code> enforces one writer at the type level. No CAS on the write path.</td>
+          </tr>
+          <tr>
+            <td class="td-label">Lossy overflow by default</td>
+            <td>Publisher never blocks. Slow subscribers detect drops via <code>TryRecvError::Lagged</code>.</td>
+          </tr>
+          <tr>
+            <td class="td-label">64-bit atomics required</td>
+            <td>The seqlock stamp is a <code>u64</code>. Platforms without atomic 64-bit operations are not supported.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <strong>When to choose crossbeam-channel instead:</strong>
+      If each message should be consumed by exactly one receiver (point-to-point ownership transfer), use
+      <a href="https://crates.io/crates/crossbeam-channel" target="_blank" rel="noopener">crossbeam-channel</a>.
+      Photon Ring is optimised for broadcast: every subscriber sees the same stream with independent cursors and no contention.
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     API
+     ========================================================= -->
+<section id="api">
+  <div class="container">
+    <h2 class="section-title">API Overview</h2>
+    <p class="section-sub">
+      Channels, buses, pipelines, and wait strategies &mdash; all composable.
+      See <a href="https://docs.rs/photon-ring" target="_blank" rel="noopener">docs.rs</a> for the full reference.
+    </p>
+
+    <!-- SPMC channel -->
+    <h3 style="color:var(--text-bright);font-size:1rem;font-weight:600;margin-bottom:12px;">SPMC channel</h3>
+    <div class="code-block mb-24">
+      <div class="code-header">
+        <span>Channel basics</span>
+        <span class="code-lang">rust</span>
+      </div>
+<pre><span class="cmt">// Single producer, multiple consumers &mdash; the fastest path</span>
+<span class="kw">let</span> (<span class="kw">mut</span> pub_, subs) = <span class="fn_">channel</span>::&lt;<span class="ty">u64</span>&gt;(<span class="num">1024</span>);
+<span class="kw">let</span> <span class="kw">mut</span> sub = subs.<span class="fn_">subscribe</span>();
+
+pub_.<span class="fn_">publish</span>(<span class="num">42</span>);
+<span class="mac">assert_eq!</span>(sub.<span class="fn_">try_recv</span>(), <span class="ty">Ok</span>(<span class="num">42</span>));
+
+<span class="cmt">// Bounded backpressure (publisher blocks instead of overwriting)</span>
+<span class="kw">let</span> (<span class="kw">mut</span> pub_, subs) = <span class="fn_">channel_bounded</span>::&lt;<span class="ty">u64</span>&gt;(<span class="num">1024</span>, <span class="num">512</span>);
+
+<span class="cmt">// Multiple producers</span>
+<span class="kw">let</span> (mp_pub, subs) = <span class="fn_">channel_mpmc</span>::&lt;<span class="ty">u64</span>&gt;(<span class="num">1024</span>);
+<span class="kw">let</span> mp_pub2 = mp_pub.<span class="fn_">clone</span>();  <span class="cmt">// MpPublisher: Clone + Send + Sync</span></pre>
+    </div>
+
+    <!-- Named-topic bus -->
+    <h3 style="color:var(--text-bright);font-size:1rem;font-weight:600;margin-bottom:12px;">Named-topic bus</h3>
+    <div class="code-block mb-24">
+      <div class="code-header">
+        <span>Photon&lt;T&gt; bus</span>
+        <span class="code-lang">rust</span>
+      </div>
+<pre><span class="kw">let</span> bus = <span class="ty">Photon</span>::&lt;<span class="ty">u64</span>&gt;::<span class="fn_">new</span>(<span class="num">1024</span>);
+
+<span class="kw">let</span> <span class="kw">mut</span> prices = bus.<span class="fn_">publisher</span>(<span class="str">"prices"</span>);
+<span class="kw">let</span> <span class="kw">mut</span> trades = bus.<span class="fn_">publisher</span>(<span class="str">"trades"</span>);
+
+<span class="kw">let</span> <span class="kw">mut</span> sub = bus.<span class="fn_">subscribe</span>(<span class="str">"prices"</span>);
+
+prices.<span class="fn_">publish</span>(<span class="num">100</span>);
+<span class="mac">assert_eq!</span>(sub.<span class="fn_">try_recv</span>(), <span class="ty">Ok</span>(<span class="num">100</span>));</pre>
+    </div>
+
+    <!-- Pipeline -->
+    <h3 style="color:var(--text-bright);font-size:1rem;font-weight:600;margin-bottom:12px;">Pipeline topology</h3>
+    <div class="code-block mb-24">
+      <div class="code-header">
+        <span>Multi-stage pipeline builder</span>
+        <span class="code-lang">rust</span>
+      </div>
+<pre><span class="kw">let</span> (input, pipeline) = <span class="ty">Pipeline</span>::<span class="fn_">builder</span>()
+    .<span class="fn_">capacity</span>(<span class="num">4096</span>)
+    .<span class="fn_">input</span>::&lt;<span class="ty">u64</span>&gt;()
+    .<span class="fn_">then</span>(|x| x * <span class="num">2</span>)       <span class="cmt">// stage 1: dedicated thread</span>
+    .<span class="fn_">then</span>(|x| x + <span class="num">1</span>)       <span class="cmt">// stage 2: dedicated thread</span>
+    .<span class="fn_">build</span>();
+
+input.<span class="fn_">publish</span>(<span class="num">21</span>);
+
+<span class="cmt">// Fan-out: diamond topology</span>
+<span class="kw">let</span> (input, _pipeline) = <span class="ty">Pipeline</span>::<span class="fn_">builder</span>()
+    .<span class="fn_">capacity</span>(<span class="num">1024</span>)
+    .<span class="fn_">input</span>::&lt;<span class="ty">u64</span>&gt;()
+    .<span class="fn_">fan_out</span>(|x| x * <span class="num">2</span>, |x| x + <span class="num">100</span>)   <span class="cmt">// two parallel branches</span>
+    .<span class="fn_">build</span>();</pre>
+    </div>
+
+    <!-- Wait strategies -->
+    <h3 style="color:var(--text-bright);font-size:1rem;font-weight:600;margin-bottom:12px;">Wait strategies</h3>
+    <div class="code-block mb-24">
+      <div class="code-header">
+        <span>Blocking vs. spinning</span>
+        <span class="code-lang">rust</span>
+      </div>
+<pre><span class="kw">use</span> <span class="ty">photon_ring</span>::<span class="ty">WaitStrategy</span>;
+
+<span class="cmt">// Absolute lowest wakeup latency</span>
+sub.<span class="fn_">recv_with</span>(<span class="ty">WaitStrategy</span>::<span class="ty">BusySpin</span>);
+
+<span class="cmt">// Cooperative spinning (yields CPU between spins)</span>
+sub.<span class="fn_">recv_with</span>(<span class="ty">WaitStrategy</span>::<span class="ty">YieldSpin</span>);
+
+<span class="cmt">// Exponential backoff (good for mixed loads)</span>
+sub.<span class="fn_">recv_with</span>(<span class="ty">WaitStrategy</span>::<span class="ty">BackoffSpin</span>);
+
+<span class="cmt">// Automatically tunes based on observed latency</span>
+sub.<span class="fn_">recv_with</span>(<span class="ty">WaitStrategy</span>::<span class="ty">Adaptive</span>);</pre>
+    </div>
+
+    <!-- Platform support table -->
+    <h3 style="color:var(--text-bright);font-size:1rem;font-weight:600;margin-bottom:12px;">Platform support</h3>
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Platform</th>
+            <th>Core ring</th>
+            <th>Affinity</th>
+            <th>Topology</th>
+            <th>Hugepages</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>x86_64 Linux</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+          </tr>
+          <tr>
+            <td>x86_64 macOS / Windows</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td>aarch64 Linux</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+          </tr>
+          <tr>
+            <td>aarch64 macOS (Apple Silicon)</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td>wasm32</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td>FreeBSD / NetBSD / Android</td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-yes">Yes</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+          <tr>
+            <td>32-bit ARM (Cortex-M)</td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+            <td><span class="badge-no">No</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     GET STARTED
+     ========================================================= -->
+<section id="get-started">
+  <div class="container">
+    <h2 class="section-title">Get Started</h2>
+    <p class="section-sub">From zero to a working channel in under a minute</p>
+
+    <div class="install-card mb-24">
+      <h3>1. Add to Cargo.toml</h3>
+      <div class="code-block" style="margin:0;">
+        <div class="code-header">
+          <span>Cargo.toml</span>
+          <span class="code-lang">toml</span>
+        </div>
+<pre>[dependencies]
+photon-ring = <span class="str">"2"</span>
+
+<span class="cmt"># Optional features</span>
+<span class="cmt"># photon-ring = { version = "2", features = ["derive", "hugepages"] }</span></pre>
+      </div>
+    </div>
+
+    <div class="install-card mb-24">
+      <h3>2. Quick start</h3>
+      <div class="code-block" style="margin:0;">
+        <div class="code-header">
+          <span>src/main.rs</span>
+          <span class="code-lang">rust</span>
+        </div>
+<pre><span class="kw">use</span> <span class="ty">photon_ring</span>::{<span class="fn_">channel</span>, <span class="ty">Photon</span>};
+
+<span class="kw">fn</span> <span class="fn_">main</span>() {
+    <span class="cmt">// SPMC: one publisher, multiple independent subscribers</span>
+    <span class="kw">let</span> (<span class="kw">mut</span> pub_, subs) = <span class="fn_">channel</span>::&lt;<span class="ty">u64</span>&gt;(<span class="num">1024</span>);
+    <span class="kw">let</span> <span class="kw">mut</span> sub_a = subs.<span class="fn_">subscribe</span>();
+    <span class="kw">let</span> <span class="kw">mut</span> sub_b = subs.<span class="fn_">subscribe</span>();
+
+    pub_.<span class="fn_">publish</span>(<span class="num">42</span>);
+
+    <span class="cmt">// Both subscribers see the same message</span>
+    <span class="mac">assert_eq!</span>(sub_a.<span class="fn_">try_recv</span>(), <span class="ty">Ok</span>(<span class="num">42</span>));
+    <span class="mac">assert_eq!</span>(sub_b.<span class="fn_">try_recv</span>(), <span class="ty">Ok</span>(<span class="num">42</span>));
+
+    <span class="cmt">// Named-topic bus</span>
+    <span class="kw">let</span> bus = <span class="ty">Photon</span>::&lt;<span class="ty">u64</span>&gt;::<span class="fn_">new</span>(<span class="num">1024</span>);
+    <span class="kw">let</span> <span class="kw">mut</span> p = bus.<span class="fn_">publisher</span>(<span class="str">"prices"</span>);
+    <span class="kw">let</span> <span class="kw">mut</span> s = bus.<span class="fn_">subscribe</span>(<span class="str">"prices"</span>);
+    p.<span class="fn_">publish</span>(<span class="num">100</span>);
+    <span class="mac">assert_eq!</span>(s.<span class="fn_">try_recv</span>(), <span class="ty">Ok</span>(<span class="num">100</span>));
+}</pre>
+      </div>
+    </div>
+
+    <div class="install-card mb-24">
+      <h3>3. Cross-thread usage</h3>
+      <div class="code-block" style="margin:0;">
+        <div class="code-header">
+          <span>Cross-thread example</span>
+          <span class="code-lang">rust</span>
+        </div>
+<pre><span class="kw">use</span> <span class="ty">photon_ring</span>::{<span class="fn_">channel</span>, <span class="ty">WaitStrategy</span>};
+<span class="kw">use</span> std::thread;
+
+<span class="kw">let</span> (<span class="kw">mut</span> pub_, subs) = <span class="fn_">channel</span>::&lt;<span class="ty">u64</span>&gt;(<span class="num">4096</span>);
+<span class="kw">let</span> <span class="kw">mut</span> sub = subs.<span class="fn_">subscribe</span>();
+
+<span class="kw">let</span> consumer = <span class="ty">thread</span>::<span class="fn_">spawn</span>(<span class="kw">move</span> || {
+    <span class="kw">loop</span> {
+        <span class="kw">match</span> sub.<span class="fn_">try_recv</span>() {
+            <span class="ty">Ok</span>(v)  =&gt; { <span class="cmt">/* process v */</span> }
+            <span class="ty">Err</span>(_) =&gt; <span class="kw">break</span>,
+        }
+    }
+});
+
+<span class="kw">for</span> i <span class="kw">in</span> <span class="num">0</span>..<span class="num">1_000_000</span> {
+    pub_.<span class="fn_">publish</span>(i);
+}
+
+consumer.<span class="fn_">join</span>().<span class="fn_">unwrap</span>();</pre>
+      </div>
+    </div>
+
+    <div class="install-card">
+      <h3>Resources</h3>
+      <ul class="step-list" style="counter-reset:none;">
+        <li style="counter-increment:none;list-style-type:disc;margin-left:24px;">
+          <a href="https://docs.rs/photon-ring" target="_blank" rel="noopener">docs.rs API reference</a>
+          &mdash; full public API with examples
+        </li>
+        <li style="counter-increment:none;list-style-type:disc;margin-left:24px;">
+          <a href="https://github.com/userFRM/photon-ring/tree/master/examples" target="_blank" rel="noopener">
+            GitHub examples
+          </a>
+          &mdash; market_data, pipeline, backpressure, diamond, pinned_latency
+        </li>
+        <li style="counter-increment:none;list-style-type:disc;margin-left:24px;">
+          <a href="benchmark-methodology.html">Benchmark methodology</a>
+          &mdash; how to reproduce the numbers
+        </li>
+        <li style="counter-increment:none;list-style-type:disc;margin-left:24px;">
+          <a href="payload-scaling.html">Payload scaling analysis</a>
+          &mdash; latency vs payload size, 8 B &ndash; 4 KiB
+        </li>
+        <li style="counter-increment:none;list-style-type:disc;margin-left:24px;">
+          <a href="technical-report.html">Technical report</a>
+          &mdash; cache coherence theory, seqlock design, formal analysis
+        </li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     FOOTER
+     ========================================================= -->
+<footer>
+  <div class="container">
+    <div class="footer-links">
+      <a href="https://github.com/userFRM/photon-ring" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://crates.io/crates/photon-ring" target="_blank" rel="noopener">crates.io</a>
+      <a href="https://docs.rs/photon-ring" target="_blank" rel="noopener">docs.rs</a>
+      <a href="benchmark-methodology.html">Benchmark methodology</a>
+      <a href="payload-scaling.html">Payload scaling</a>
+      <a href="technical-report.html">Technical report</a>
+    </div>
+    <p>
+      Licensed under
+      <a href="https://github.com/userFRM/photon-ring/blob/master/LICENSE-APACHE" target="_blank" rel="noopener">Apache-2.0</a>.
+      &copy; 2026 Photon Ring Contributors.
+    </p>
+  </div>
+</footer>
+
+<!-- =========================================================
+     CHARTS (Chart.js)
+     ========================================================= -->
+<script>
+(function () {
+  'use strict';
+
+  /* Shared defaults */
+  Chart.defaults.color = '#8b949e';
+  Chart.defaults.borderColor = '#30363d';
+  Chart.defaults.font.family = "SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace";
+  Chart.defaults.font.size = 11;
+
+  const PHOTON_BLUE   = 'rgba(88,  166, 255, 0.85)';
+  const PHOTON_BLUE_B = 'rgba(88,  166, 255, 0.40)';
+  const DISRUPT_AMBER = 'rgba(227, 179,  65, 0.80)';
+  const DISRUPT_AMB_B = 'rgba(227, 179,  65, 0.35)';
+
+  /* ---- 1. Latency histogram ---- */
+  (function buildHistogram () {
+    const bucketLabels = ['<32', '32-64', '64-128', '128-256', '256-512',
+                          '512-1K', '1-2K', '2-4K', '4-8K', '8K+'];
+
+    /* Photon Ring: 90%+ of samples cluster in 32-64 ns range (p50=48, p90=61) */
+    const photonData    = [0, 5000, 85000, 8000, 1500, 300, 150, 40, 8, 2];
+    /* disruptor-rs: heavier tail, most samples 128-256 ns */
+    const disruptorData = [0,    0,  2000, 50000, 35000, 8000, 3000, 1500, 400, 100];
+
+    new Chart(document.getElementById('latencyHistogram'), {
+      type: 'bar',
+      data: {
+        labels: bucketLabels,
+        datasets: [
+          {
+            label: 'Photon Ring',
+            data: photonData,
+            backgroundColor: PHOTON_BLUE,
+            borderColor: 'rgba(88,166,255,0.9)',
+            borderWidth: 1,
+            borderRadius: 2,
+          },
+          {
+            label: 'disruptor-rs (estimated)',
+            data: disruptorData,
+            backgroundColor: DISRUPT_AMBER,
+            borderColor: 'rgba(227,179,65,0.9)',
+            borderWidth: 1,
+            borderRadius: 2,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16 } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => ` ${ctx.dataset.label}: ${ctx.raw.toLocaleString()} samples`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            title: { display: true, text: 'Latency bucket (ns)', color: '#8b949e' },
+            grid: { color: 'rgba(48,54,61,0.6)' },
+          },
+          y: {
+            title: { display: true, text: 'Sample count', color: '#8b949e' },
+            grid: { color: 'rgba(48,54,61,0.6)' },
+            ticks: {
+              callback: (v) => v >= 1000 ? (v / 1000) + 'K' : v,
+            },
+          },
+        },
+      },
+    });
+  }());
+
+  /* ---- 2. Publish latency bar ---- */
+  (function buildPublishBar () {
+    new Chart(document.getElementById('publishBar'), {
+      type: 'bar',
+      data: {
+        labels: ['Intel i7-10700KF', 'Apple M1 Pro'],
+        datasets: [
+          {
+            label: 'Photon Ring',
+            data: [2.8, 2.4],
+            backgroundColor: PHOTON_BLUE,
+            borderColor: 'rgba(88,166,255,0.9)',
+            borderWidth: 1,
+            borderRadius: 3,
+          },
+          {
+            label: 'disruptor-rs',
+            data: [30.6, 15.3],
+            backgroundColor: DISRUPT_AMBER,
+            borderColor: 'rgba(227,179,65,0.9)',
+            borderWidth: 1,
+            borderRadius: 3,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16 } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => ` ${ctx.dataset.label}: ${ctx.raw} ns`,
+            },
+          },
+        },
+        scales: {
+          y: {
+            title: { display: true, text: 'Latency (ns)', color: '#8b949e' },
+            grid: { color: 'rgba(48,54,61,0.6)' },
+            beginAtZero: true,
+          },
+          x: { grid: { color: 'rgba(48,54,61,0.6)' } },
+        },
+      },
+    });
+  }());
+
+  /* ---- 3. Roundtrip bar ---- */
+  (function buildRoundtripBar () {
+    new Chart(document.getElementById('roundtripBar'), {
+      type: 'bar',
+      data: {
+        labels: ['Intel i7-10700KF', 'Apple M1 Pro'],
+        datasets: [
+          {
+            label: 'Photon Ring',
+            data: [95, 130],
+            backgroundColor: PHOTON_BLUE,
+            borderColor: 'rgba(88,166,255,0.9)',
+            borderWidth: 1,
+            borderRadius: 3,
+          },
+          {
+            label: 'disruptor-rs',
+            data: [138, 186],
+            backgroundColor: DISRUPT_AMBER,
+            borderColor: 'rgba(227,179,65,0.9)',
+            borderWidth: 1,
+            borderRadius: 3,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16 } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => ` ${ctx.dataset.label}: ${ctx.raw} ns`,
+            },
+          },
+        },
+        scales: {
+          y: {
+            title: { display: true, text: 'Roundtrip latency (ns)', color: '#8b949e' },
+            grid: { color: 'rgba(48,54,61,0.6)' },
+            beginAtZero: true,
+          },
+          x: { grid: { color: 'rgba(48,54,61,0.6)' } },
+        },
+      },
+    });
+  }());
+
+  /* ---- 4. RDTSC percentiles ---- */
+  (function buildPercentiles () {
+    new Chart(document.getElementById('percentilesBar'), {
+      type: 'bar',
+      data: {
+        labels: ['min', 'p50', 'p90', 'p99', 'p99.9 (est.)'],
+        datasets: [
+          {
+            label: 'One-way latency (ns)',
+            data: [34, 48, 61, 66, 110],
+            backgroundColor: [
+              PHOTON_BLUE, PHOTON_BLUE, PHOTON_BLUE,
+              'rgba(88,166,255,0.65)', 'rgba(88,166,255,0.45)',
+            ],
+            borderColor: 'rgba(88,166,255,0.9)',
+            borderWidth: 1,
+            borderRadius: 3,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => ` ${ctx.raw} ns`,
+            },
+          },
+          annotation: {},
+        },
+        scales: {
+          y: {
+            title: { display: true, text: 'Latency (ns)', color: '#8b949e' },
+            grid: { color: 'rgba(48,54,61,0.6)' },
+            beginAtZero: true,
+            suggestedMax: 130,
+          },
+          x: { grid: { color: 'rgba(48,54,61,0.6)' } },
+        },
+      },
+    });
+  }());
+
+}());
+</script>
+
+</body>
+</html>

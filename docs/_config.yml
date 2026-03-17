@@ -1,0 +1,23 @@
+# Copyright 2026 Photon Ring Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# GitHub Pages configuration for photon-ring.
+# Source: docs/ directory on master branch.
+
+title: "Photon Ring"
+description: "Ultra-low-latency SPMC/MPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."
+url: "https://userFRM.github.io"
+baseurl: "/photon-ring"
+
+# Disable Jekyll processing of HTML files (we write raw HTML).
+# GitHub Pages will serve them as-is.
+include:
+  - "*.html"
+  - "images"
+
+# Do not transform these files with Jekyll.
+exclude:
+  - "*.md"
+
+# No Jekyll theme -- we use our own CSS.
+theme: ~

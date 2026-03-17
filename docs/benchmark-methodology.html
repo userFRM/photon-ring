@@ -1,0 +1,252 @@
+<!--
+  Copyright 2026 Photon Ring Contributors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Benchmark Methodology &mdash; Photon Ring</title>
+  <meta name="description" content="How Photon Ring benchmarks are structured, what they measure, and how to reproduce them.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x2299;</text></svg>">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d1117; --bg-surface: #161b22; --bg-raised: #1c2128;
+      --border: #30363d; --border-dim: #21262d;
+      --text: #c9d1d9; --text-dim: #8b949e; --text-bright: #f0f6fc;
+      --accent: #58a6ff; --accent-dim: #1f6feb;
+      --green: #3fb950; --amber: #e3b341;
+      --radius: 6px; --radius-lg: 10px;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+    html { scroll-behavior: smooth; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.7; -webkit-font-smoothing: antialiased; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .container { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+    nav { position: sticky; top: 0; z-index: 100; background: rgba(13,17,23,0.92); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
+    .nav-inner { display: flex; align-items: center; gap: 8px; height: 56px; max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+    .nav-brand { font-weight: 700; font-size: 1rem; color: var(--text-bright); text-decoration: none; display: flex; align-items: center; gap: 8px; }
+    .nav-brand:hover { color: var(--accent); text-decoration: none; }
+    .nav-links { display: flex; gap: 4px; margin-left: auto; list-style: none; }
+    .nav-links a { padding: 6px 12px; border-radius: var(--radius); font-size: 0.875rem; color: var(--text-dim); transition: color 0.15s, background 0.15s; white-space: nowrap; }
+    .nav-links a:hover { color: var(--text-bright); background: var(--bg-raised); text-decoration: none; }
+    .page-header { padding: 48px 0 36px; border-bottom: 1px solid var(--border-dim); }
+    .page-header h1 { font-size: 2rem; font-weight: 800; color: var(--text-bright); margin-bottom: 8px; }
+    .page-header p { color: var(--text-dim); }
+    .breadcrumb { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 12px; }
+    .content { padding: 48px 0; }
+    h2 { font-size: 1.3rem; font-weight: 700; color: var(--text-bright); margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border-dim); }
+    h2:first-child { margin-top: 0; }
+    h3 { font-size: 1rem; font-weight: 600; color: var(--text-bright); margin: 24px 0 12px; }
+    p { margin-bottom: 16px; }
+    .table-wrapper { overflow-x: auto; margin: 20px 0; border-radius: var(--radius-lg); border: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    thead th { background: var(--bg-raised); color: var(--text-bright); font-weight: 600; padding: 10px 16px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    tbody tr:nth-child(even) { background: var(--bg-surface); }
+    tbody td { padding: 9px 16px; border-bottom: 1px solid var(--border-dim); }
+    tbody tr:last-child td { border-bottom: none; }
+    .code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow-x: auto; margin: 16px 0; }
+    .code-block pre { padding: 20px 24px; font-family: var(--mono); font-size: 0.875rem; line-height: 1.65; color: var(--text); }
+    .callout { background: var(--bg-surface); border-left: 3px solid var(--accent); border-radius: 0 var(--radius) var(--radius) 0; padding: 14px 18px; font-size: 0.9rem; color: var(--text-dim); margin: 20px 0; }
+    .callout-warn { border-left-color: var(--amber); }
+    .callout strong { color: var(--text-bright); }
+    code { font-family: var(--mono); font-size: 0.875em; background: var(--bg-raised); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
+    footer { background: var(--bg-surface); border-top: 1px solid var(--border); padding: 32px 0; text-align: center; color: var(--text-dim); font-size: 0.875rem; }
+    footer a { color: var(--text-dim); }
+    footer a:hover { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-brand" href="index.html">
+      <span>&#x2299;</span> Photon Ring
+    </a>
+    <ul class="nav-links">
+      <li><a href="index.html#overview">Overview</a></li>
+      <li><a href="index.html#benchmarks">Benchmarks</a></li>
+      <li><a href="index.html#comparison">Comparison</a></li>
+      <li><a href="index.html#api">API</a></li>
+      <li><a href="index.html#get-started">Get Started</a></li>
+      <li><a href="https://docs.rs/photon-ring" target="_blank" rel="noopener">docs.rs &#x2197;</a></li>
+      <li><a href="https://github.com/userFRM/photon-ring" target="_blank" rel="noopener">GitHub &#x2197;</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="page-header">
+  <div class="container">
+    <div class="breadcrumb"><a href="index.html">Photon Ring</a> / Benchmark Methodology</div>
+    <h1>Benchmark Methodology</h1>
+    <p>How the benchmarks are structured, what they measure, what they do not control, and how to reproduce them.</p>
+  </div>
+</div>
+
+<div class="content">
+  <div class="container">
+
+    <h2>Hardware</h2>
+
+    <h3>Machine A (primary)</h3>
+    <div class="table-wrapper">
+      <table>
+        <thead><tr><th>Property</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>CPU</td><td>Intel Core i7-10700KF (Comet Lake)</td></tr>
+          <tr><td>Base frequency</td><td>3.80 GHz</td></tr>
+          <tr><td>Turbo frequency</td><td>Up to 5.10 GHz (single-core)</td></tr>
+          <tr><td>Cores / Threads</td><td>8 cores / 16 threads (SMT enabled)</td></tr>
+          <tr><td>L1d cache</td><td>32 KB per core, 8-way</td></tr>
+          <tr><td>L2 cache</td><td>256 KB per core, 4-way</td></tr>
+          <tr><td>L3 cache</td><td>16 MB shared, ring bus interconnect</td></tr>
+          <tr><td>Architecture</td><td>x86_64, Comet Lake (14 nm)</td></tr>
+          <tr><td>OS</td><td>Ubuntu (Linux 6.8)</td></tr>
+          <tr><td>Rust</td><td>1.93.1 stable</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Machine B (secondary)</h3>
+    <div class="table-wrapper">
+      <table>
+        <thead><tr><th>Property</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>CPU</td><td>Apple M1 Pro</td></tr>
+          <tr><td>Cores</td><td>8 (6 performance + 2 efficiency)</td></tr>
+          <tr><td>Architecture</td><td>aarch64 (ARMv8.5-A)</td></tr>
+          <tr><td>L1d cache</td><td>128 KB per P-core, 64 KB per E-core</td></tr>
+          <tr><td>L2 cache</td><td>12 MB P-cluster, 4 MB E-cluster</td></tr>
+          <tr><td>OS</td><td>macOS 26.3</td></tr>
+          <tr><td>Rust</td><td>1.92.0 stable</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Criterion Configuration</h2>
+
+    <div class="table-wrapper">
+      <table>
+        <thead><tr><th>Parameter</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Sample size</td><td>100 (Criterion default)</td></tr>
+          <tr><td>Warm-up time</td><td>3 seconds (Criterion default)</td></tr>
+          <tr><td>Measurement time</td><td>5 seconds (Criterion default)</td></tr>
+          <tr><td>Reported statistic</td><td>Median</td></tr>
+          <tr><td>Outlier detection</td><td>Criterion built-in MAD-based classification</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Compiler flags: <code>--release</code> (opt-level 3). No custom <code>RUSTFLAGS</code>, no LTO, PGO, or <code>target-cpu=native</code>.</p>
+
+    <h2>What Is NOT Controlled</h2>
+
+    <p>The following variables are not controlled and can cause variance between runs and machines:</p>
+
+    <ul style="margin-left:24px;margin-bottom:16px;">
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">CPU frequency governor.</strong> Left at OS default. Turbo boost is not disabled.</li>
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">SMT (Hyper-Threading).</strong> Enabled on Machine A. Cross-thread benchmarks may land on sibling hyperthreads or separate physical cores, which dramatically changes latency.</li>
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">Core isolation.</strong> No <code>isolcpus</code>, <code>nohz_full</code>, or <code>rcu_nocbs</code> kernel parameters are set.</li>
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">Core pinning.</strong> Criterion benchmarks do not pin threads. The <code>rdtsc_oneway</code> bench and the <code>pinned_latency</code> example do use core pinning where noted.</li>
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">Background load.</strong> Benchmarks run on a developer workstation, not a dedicated bare-metal machine.</li>
+    </ul>
+
+    <h2>Cross-Thread Roundtrip Methodology</h2>
+
+    <p>
+      The roundtrip benchmark (<code>benches/throughput.rs</code>, function <code>cross_thread_latency</code>)
+      measures the time for a message to travel from the publisher to a subscriber thread and
+      for the subscriber to signal receipt back:
+    </p>
+    <ol style="margin-left:24px;margin-bottom:16px;">
+      <li style="margin-bottom:8px;">Publisher writes a <code>u64</code> sequence number via <code>publish(i)</code>.</li>
+      <li style="margin-bottom:8px;">Subscriber thread busy-spins on <code>try_recv()</code>. On receipt it stores the value into a shared <code>AtomicU64</code> (<code>seen</code>) with Release ordering.</li>
+      <li style="margin-bottom:8px;">Publisher busy-spins on <code>seen.load(Acquire)</code> until it equals <code>i</code>.</li>
+      <li style="margin-bottom:8px;">Criterion measures steps 1&ndash;3.</li>
+    </ol>
+
+    <div class="callout">
+      <strong>Note:</strong> This is a <em>roundtrip</em> measurement: it includes one cache line transfer
+      for the slot data (publisher &rarr; subscriber) and one for the <code>seen</code> atomic
+      (subscriber &rarr; publisher). The reported 95 ns is approximately 2x the true one-way
+      latency plus the <code>AtomicU64</code> signal-back overhead.
+    </div>
+
+    <h2>One-Way Latency (RDTSC)</h2>
+
+    <p>
+      The one-way benchmark (<code>benches/rdtsc_oneway.rs</code>) eliminates signal-back overhead
+      by embedding the publisher's TSC reading directly in the message payload:
+    </p>
+    <ol style="margin-left:24px;margin-bottom:16px;">
+      <li style="margin-bottom:8px;">Publisher calls <code>RDTSCP</code> (serializing TSC read) immediately before <code>publish()</code>. The TSC value is stored in the message payload.</li>
+      <li style="margin-bottom:8px;">Subscriber calls <code>LFENCE; RDTSC</code> immediately after <code>try_recv()</code> returns <code>Ok</code>.</li>
+      <li style="margin-bottom:8px;">The delta <code>(subscriber_tsc - publisher_tsc)</code> is recorded in raw cycles.</li>
+      <li style="margin-bottom:8px;">After 100,000 samples (10,000 warmup discarded), percentiles are computed and converted to nanoseconds using the known CPU base and turbo frequencies.</li>
+    </ol>
+
+    <h2>Disruptor Comparison</h2>
+
+    <p>
+      Both Photon Ring and disruptor-rs benchmarks run in the same Criterion binary,
+      compiled with identical flags, in the same <code>cargo bench</code> invocation:
+    </p>
+    <ul style="margin-left:24px;margin-bottom:16px;">
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">Same ring size:</strong> 4096 slots.</li>
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">Same wait strategy:</strong> <code>BusySpin</code> (lowest-latency strategy in both libraries).</li>
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">Publish-only:</strong> Disruptor ring has a single <code>BusySpin</code> consumer attached (required by its API). The consumer stores received values into a <code>Relaxed</code> atomic, which the benchmark ignores.</li>
+    </ul>
+
+    <div class="callout callout-warn">
+      <strong>Cross-thread Disruptor numbers are not available</strong> because the Disruptor's consumer
+      thread is managed internally by its builder API. The roundtrip comparison uses same-thread
+      Criterion iteration for both libraries.
+    </div>
+
+    <h2>How to Reproduce</h2>
+
+    <h3>Full benchmark suite (Criterion)</h3>
+    <div class="code-block">
+      <pre>cargo bench --bench throughput
+cargo bench --bench payload_scaling</pre>
+    </div>
+    <p>Results are written to <code>target/criterion/</code> as JSON and HTML reports.</p>
+
+    <h3>One-way latency (RDTSC)</h3>
+    <div class="code-block">
+      <pre># x86_64 only -- uses inline RDTSCP/LFENCE+RDTSC
+cargo bench --bench rdtsc_oneway</pre>
+    </div>
+
+    <h3>Pinned-core latency example</h3>
+    <div class="code-block">
+      <pre>cargo run --release --example pinned_latency</pre>
+    </div>
+
+    <h2>Caveats</h2>
+
+    <ul style="margin-left:24px;">
+      <li style="margin-bottom:10px;"><strong style="color:var(--text-bright);">Self-benchmarks.</strong> All benchmarks are authored and run by the Photon Ring maintainers. They have not been independently verified by a third party.</li>
+      <li style="margin-bottom:10px;"><strong style="color:var(--text-bright);">Hardware-dependent.</strong> Numbers are specific to the tested hardware. Different CPUs, cache hierarchies, and interconnects will produce different results.</li>
+      <li style="margin-bottom:10px;"><strong style="color:var(--text-bright);">Disruptor comparison is against the Rust port.</strong> The <a href="https://crates.io/crates/disruptor" target="_blank" rel="noopener">disruptor</a> crate (v4.0.0) is a Rust reimplementation of the LMAX Disruptor pattern. A direct comparison against the Java original on matched hardware has not been performed.</li>
+      <li style="margin-bottom:10px;"><strong style="color:var(--text-bright);">Median vs. tail latency.</strong> The README reports median (p50). Tail latency (p99, p999) is higher and more variable. The <code>rdtsc_oneway</code> benchmark reports full percentile distributions.</li>
+      <li style="margin-bottom:10px;"><strong style="color:var(--text-bright);">Single-socket only.</strong> All benchmarks run on single-socket machines. Cross-socket (NUMA) latency would be significantly higher for both libraries.</li>
+    </ul>
+
+  </div>
+</div>
+
+<footer>
+  <div class="container">
+    Licensed under <a href="https://github.com/userFRM/photon-ring/blob/master/LICENSE-APACHE" target="_blank" rel="noopener">Apache-2.0</a>.
+    &copy; 2026 Photon Ring Contributors.
+    &mdash; <a href="index.html">Back to home</a>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,369 @@
+<!--
+  Copyright 2026 Photon Ring Contributors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Technical Report &mdash; Photon Ring</title>
+  <meta name="description" content="Seqlock-Stamped Ring Buffers for Sub-100ns Inter-Thread Messaging: cache coherence, seqlock design, and formal analysis.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x2299;</text></svg>">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d1117; --bg-surface: #161b22; --bg-raised: #1c2128;
+      --border: #30363d; --border-dim: #21262d;
+      --text: #c9d1d9; --text-dim: #8b949e; --text-bright: #f0f6fc;
+      --accent: #58a6ff; --accent-dim: #1f6feb;
+      --green: #3fb950; --amber: #e3b341;
+      --radius: 6px; --radius-lg: 10px;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+    html { scroll-behavior: smooth; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.75; -webkit-font-smoothing: antialiased; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .container { max-width: 780px; margin: 0 auto; padding: 0 24px; }
+    nav { position: sticky; top: 0; z-index: 100; background: rgba(13,17,23,0.92); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
+    .nav-inner { display: flex; align-items: center; gap: 8px; height: 56px; max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+    .nav-brand { font-weight: 700; font-size: 1rem; color: var(--text-bright); text-decoration: none; display: flex; align-items: center; gap: 8px; }
+    .nav-brand:hover { color: var(--accent); text-decoration: none; }
+    .nav-links { display: flex; gap: 4px; margin-left: auto; list-style: none; }
+    .nav-links a { padding: 6px 12px; border-radius: var(--radius); font-size: 0.875rem; color: var(--text-dim); transition: color 0.15s, background 0.15s; white-space: nowrap; }
+    .nav-links a:hover { color: var(--text-bright); background: var(--bg-raised); text-decoration: none; }
+    .page-header { padding: 48px 0 36px; border-bottom: 1px solid var(--border-dim); }
+    .page-header h1 { font-size: 1.85rem; font-weight: 800; color: var(--text-bright); margin-bottom: 8px; line-height: 1.25; }
+    .page-header .subtitle { color: var(--text-dim); font-size: 1.05rem; margin-bottom: 16px; }
+    .abstract-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); font-weight: 600; margin-bottom: 8px; }
+    .abstract-box { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 24px; font-size: 0.9rem; color: var(--text-dim); line-height: 1.7; }
+    .breadcrumb { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 12px; }
+    .content { padding: 48px 0; }
+    h2 { font-size: 1.25rem; font-weight: 700; color: var(--text-bright); margin: 48px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border-dim); counter-increment: section; }
+    h2:first-child { margin-top: 0; }
+    h2::before { content: counter(section) ". "; color: var(--text-dim); }
+    h3 { font-size: 1rem; font-weight: 600; color: var(--text-bright); margin: 28px 0 12px; }
+    p { margin-bottom: 16px; }
+    .content { counter-reset: section; }
+    .code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow-x: auto; margin: 20px 0; }
+    .code-block pre { padding: 20px 24px; font-family: var(--mono); font-size: 0.85rem; line-height: 1.65; color: var(--text); }
+    .callout { background: var(--bg-surface); border-left: 3px solid var(--accent); border-radius: 0 var(--radius) var(--radius) 0; padding: 14px 18px; font-size: 0.9rem; color: var(--text-dim); margin: 20px 0; }
+    .callout strong { color: var(--text-bright); }
+    code { font-family: var(--mono); font-size: 0.875em; background: var(--bg-raised); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
+    .toc { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 24px; margin-bottom: 40px; }
+    .toc-title { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-dim); font-weight: 600; margin-bottom: 14px; }
+    .toc ol { margin-left: 20px; }
+    .toc li { margin-bottom: 6px; font-size: 0.9rem; }
+    footer { background: var(--bg-surface); border-top: 1px solid var(--border); padding: 32px 0; text-align: center; color: var(--text-dim); font-size: 0.875rem; }
+    footer a { color: var(--text-dim); }
+    footer a:hover { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-brand" href="index.html">
+      <span>&#x2299;</span> Photon Ring
+    </a>
+    <ul class="nav-links">
+      <li><a href="index.html#overview">Overview</a></li>
+      <li><a href="index.html#benchmarks">Benchmarks</a></li>
+      <li><a href="index.html#comparison">Comparison</a></li>
+      <li><a href="index.html#api">API</a></li>
+      <li><a href="index.html#get-started">Get Started</a></li>
+      <li><a href="https://docs.rs/photon-ring" target="_blank" rel="noopener">docs.rs &#x2197;</a></li>
+      <li><a href="https://github.com/userFRM/photon-ring" target="_blank" rel="noopener">GitHub &#x2197;</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="page-header">
+  <div class="container">
+    <div class="breadcrumb"><a href="index.html">Photon Ring</a> / Technical Report</div>
+    <h1>Seqlock-Stamped Ring Buffers for Sub-100ns Inter-Thread Messaging</h1>
+    <p class="subtitle">Cache coherence theory, stamp-in-slot design, safety properties, and benchmark analysis</p>
+    <div class="abstract-label">Abstract</div>
+    <div class="abstract-box">
+      Photon Ring is a single-producer multi-consumer (SPMC) message passing library for Rust that
+      achieves sub-100 nanosecond one-way inter-thread latency on commodity x86_64 hardware. The design
+      co-locates a seqlock stamp with its payload in a single cache line, eliminating the extra cache miss
+      that plagues traditional sequence-barrier designs. We describe the stamp-in-slot protocol, its safety
+      properties under the Rust memory model, and show that per-slot seqlocks combined with per-consumer
+      cursors yield constant-time, zero-allocation publish and receive operations. Benchmarks on an Intel
+      i7-10700KF demonstrate 48&nbsp;ns p50 one-way latency and 0.2&nbsp;ns per-subscriber fanout cost with
+      batched subscriber groups &mdash; a 5.5x improvement over independent consumers.
+    </div>
+  </div>
+</div>
+
+<div class="content">
+  <div class="container">
+
+    <div class="toc">
+      <div class="toc-title">Contents</div>
+      <ol>
+        <li><a href="#introduction">Introduction</a></li>
+        <li><a href="#background">Background: Cache Coherence and Seqlocks</a></li>
+        <li><a href="#design">Design: Stamp-in-Slot</a></li>
+        <li><a href="#safety">Safety and the Pod Constraint</a></li>
+        <li><a href="#advanced">Advanced Features</a></li>
+        <li><a href="#results">Benchmark Results</a></li>
+        <li><a href="#conclusion">Conclusion</a></li>
+      </ol>
+    </div>
+
+    <h2 id="introduction">Introduction</h2>
+
+    <h3>1.1 The inter-thread communication bottleneck</h3>
+    <p>
+      In concurrent systems &mdash; from high-frequency trading engines and real-time audio pipelines
+      to game simulation loops &mdash; inter-thread message passing lies on the critical path of nearly
+      every latency-sensitive operation. The dominant cost is not lock acquisition or memory allocation,
+      but the cache-coherence protocol round-trip imposed by hardware itself.
+    </p>
+    <p>
+      When a producer thread on core A writes a message, the cache line containing that message
+      transitions to the Modified state in A's private L1 cache. Before a consumer thread on core B
+      can read that message, the coherence protocol must transfer the cache line from A's cache
+      hierarchy to B's. On Intel processors using a ring-bus L3 interconnect (Comet Lake),
+      this transfer takes approximately 40&ndash;55&nbsp;ns for intra-socket transfers.
+    </p>
+    <p>
+      This coherence latency represents a hard physical floor. No software optimization can deliver
+      an inter-thread message faster than the time required for a single cache-line transfer between
+      cores. For a naive messaging scheme that touches two cache lines per message (one for the data,
+      one for a shared control variable), the floor doubles.
+    </p>
+
+    <h3>1.2 The LMAX Disruptor and its limitations</h3>
+    <p>
+      The LMAX Disruptor, introduced by Thompson, Farley, and Barker in 2011, represented a landmark
+      in the mechanical-sympathy approach to concurrent systems design. By replacing bounded queues
+      with a pre-allocated ring buffer, it eliminated per-message allocation. However, its reliance
+      on sequence barriers introduces structural overhead that cannot be eliminated within its design
+      framework.
+    </p>
+    <p>
+      On the consumer's hot path, receiving a single message requires <em>two</em> cache-line transfers:
+      first, the consumer loads the shared sequence barrier to determine a new message is available;
+      second, it loads the slot containing the message payload. If the barrier and slot reside on
+      different cache lines &mdash; which they almost always do &mdash; the consumer pays two L3 snoop
+      latencies per message: approximately 80&ndash;110&nbsp;ns of irreducible coherence traffic.
+    </p>
+
+    <h3>1.3 Our contribution</h3>
+    <p>
+      Photon Ring eliminates the sequence-barrier load from the consumer hot path. The key insight
+      is <strong>stamp-in-slot co-location</strong>: by embedding a seqlock sequence stamp directly
+      in the same <code>#[repr(C, align(64))]</code> slot structure as the message payload, both
+      ownership metadata and data reside within a single 64-byte cache line for payloads up to
+      56 bytes.
+    </p>
+
+    <h2 id="background">Background: Cache Coherence and Seqlocks</h2>
+
+    <h3>2.1 Cache coherence protocols</h3>
+    <p>
+      The MESI protocol assigns each cache line one of four states: <strong>Modified</strong> (dirty,
+      present only in this core's cache), <strong>Exclusive</strong> (clean, only in this cache),
+      <strong>Shared</strong> (clean, may be in multiple caches), and <strong>Invalid</strong> (not present).
+    </p>
+    <p>
+      The critical path for inter-thread communication is the Modified-to-Shared transition.
+      On Intel desktop processors with a ring-bus L3 interconnect (Skylake through Comet Lake),
+      the end-to-end latency for this sequence is approximately 40&ndash;55&nbsp;ns, dominated by
+      ring-bus traversal time.
+    </p>
+
+    <h3>2.2 Seqlocks in the Linux kernel</h3>
+    <p>
+      The seqlock, introduced in Linux 2.5.60, is a reader-writer synchronization mechanism
+      optimized for workloads where reads vastly outnumber writes. Readers proceed without
+      acquiring any lock, instead performing an optimistic read-and-verify protocol:
+    </p>
+    <div class="code-block">
+<pre>Writer:                           Reader:
+  write_seqlock(&seq);              do {
+  // modify protected data            s = read_seqbegin(&seq);
+  write_sequnlock(&seq);              // copy protected data
+                                    } while (read_seqretry(&seq, s));</pre>
+    </div>
+    <p>
+      If the reader's two counter samples differ, or the initial sample is odd (write in progress),
+      the reader discards the copy and retries. This is sound only when the protected data has no
+      pointers and no destructor &mdash; exactly the <code>Pod</code> constraint Photon Ring enforces.
+    </p>
+
+    <h2 id="design">Design: Stamp-in-Slot</h2>
+
+    <h3>3.1 Slot layout</h3>
+    <div class="code-block">
+<pre>#[repr(C, align(64))]
+pub struct Slot&lt;T&gt; {
+    stamp: AtomicU64,   // seqlock sequence number
+    value: UnsafeCell&lt;T&gt;,
+    // padding to align(64) if needed
+}
+
+// For T <= 56 bytes: sizeof(Slot&lt;T&gt;) == 64 (one cache line)
+// For T >  56 bytes: sizeof(Slot&lt;T&gt;) == ceil((8 + sizeof(T)) / 64) * 64</pre>
+    </div>
+
+    <h3>3.2 Write protocol</h3>
+    <div class="code-block">
+<pre>1. stamp.store(seq * 2 + 1, Release)   // odd = write in progress
+2. fence(Release)                       // stamp visible before data
+3. ptr::write(slot.value, data)         // write payload (T: Pod)
+4. stamp.store(seq * 2 + 2, Release)   // even = write complete
+5. cursor.store(seq, Release)          // consumers can proceed</pre>
+    </div>
+
+    <h3>3.3 Read protocol</h3>
+    <div class="code-block">
+<pre>1. s1 = stamp.load(Acquire)
+2. if s1 is odd:          spin (write in progress)
+3. if s1 &lt; expected*2+2: return Empty
+4. if s1 &gt; expected*2+2: return Lagged (ring wrapped)
+5. value = ptr::read(slot.value)       // optimistic copy
+6. s2 = stamp.load(Acquire)
+7. if s1 == s2:           return Ok(value)
+8. else:                  retry from step 1</pre>
+    </div>
+
+    <h3>3.4 Why one cache-line transfer suffices</h3>
+    <p>
+      When T fits in 56 bytes, the stamp at offset 0 and the value at offset 8 reside in the same
+      64-byte cache line. The consumer's <code>stamp.load(Acquire)</code> in step 1 triggers exactly
+      one L3 snoop. The <code>ptr::read</code> in step 5 reads from the same line, which is already
+      in the consumer's L1 cache. The total coherence traffic for a successful receive: one snoop,
+      ~40&ndash;55&nbsp;ns.
+    </p>
+    <p>
+      The Disruptor requires: one snoop for the sequence barrier, then one snoop for the slot
+      data (different cache line) = ~80&ndash;110&nbsp;ns minimum.
+    </p>
+
+    <h3>3.5 Per-consumer cursors eliminate shared state</h3>
+    <p>
+      Each <code>Subscriber&lt;T&gt;</code> holds a private, non-atomic <code>u64</code> cursor.
+      No cache line is shared between subscribers. The producer cursor is consulted only on the
+      lag-detection slow path. On the common-case fast path, the consumer goes directly to the
+      expected slot index and checks its stamp, with no cross-core atomic load at all.
+    </p>
+
+    <h2 id="safety">Safety and the Pod Constraint</h2>
+
+    <p>
+      The optimistic read in step 5 may observe a partially overwritten slot. If T had a destructor
+      (<code>Drop</code>) or held pointers, a torn read could produce invalid memory states before
+      the stamp check had a chance to discard the value. Photon Ring avoids this by requiring
+      <code>T: Pod</code>.
+    </p>
+
+    <p>
+      <code>Pod</code> (Plain Old Data) is an <code>unsafe</code> marker trait meaning every possible
+      bit pattern of T is a valid value. Under this constraint, a torn read produces some valid T
+      value (just not the one the producer wrote). The stamp mismatch in step 7 discards it before
+      it reaches user code. No UB occurs because:
+    </p>
+    <ol style="margin-left:24px;margin-bottom:16px;">
+      <li style="margin-bottom:8px;">No invalid bit patterns exist for T (Pod guarantee).</li>
+      <li style="margin-bottom:8px;">No destructor runs on the discarded value (Pod implies no Drop).</li>
+      <li style="margin-bottom:8px;">No pointer is dereferenced before the stamp check (value is copied, not accessed through).</li>
+    </ol>
+
+    <div class="callout">
+      <strong>Types that are NOT Pod:</strong> <code>bool</code> (only 0 and 1 are valid),
+      <code>char</code> (must be valid Unicode), <code>NonZero&lt;u32&gt;</code> (0 is invalid),
+      <code>Option&lt;T&gt;</code> (discriminant has invalid patterns), any enum,
+      any reference or pointer, <code>String</code>, <code>Vec</code>. Use primitive numeric
+      types or <code>#[repr(C)]</code> structs with Pod fields.
+    </div>
+
+    <h2 id="advanced">Advanced Features</h2>
+
+    <h3>5.1 SubscriberGroup: batched fanout</h3>
+    <p>
+      When N logical consumers are polled on the same thread, <code>SubscriberGroup&lt;T, N&gt;</code>
+      performs one ring slot read and advances N cursors in a compiler-unrolled loop.
+      Independent fanout to N subscribers costs approximately N &times; 1.1&nbsp;ns;
+      a group reduces this to a single seqlock read plus ~0.2&nbsp;ns per logical consumer
+      &mdash; a 5.5x improvement at N=10.
+    </p>
+
+    <h3>5.2 MPMC path</h3>
+    <p>
+      <code>MpPublisher&lt;T&gt;</code> is <code>Clone + Send + Sync</code> and uses atomic
+      sequence claiming (<code>fetch_add</code> on the head cursor) for concurrent producers.
+      Measured cost: 12.1&nbsp;ns on Intel (vs 2.8&nbsp;ns for SPMC), reflecting the CAS overhead
+      on the write side.
+    </p>
+
+    <h3>5.3 Pipeline topology builder</h3>
+    <p>
+      <code>topology::Pipeline</code> builds dedicated-thread processing graphs. Each stage runs
+      on its own thread with a ring buffer connecting it to the next stage. Fan-out (diamond)
+      topologies are supported via <code>.fan_out()</code>. The builder is gated to platforms
+      with OS thread support.
+    </p>
+
+    <h3>5.4 Hugepages and NUMA affinity</h3>
+    <p>
+      With the <code>hugepages</code> feature on Linux, <code>Publisher::mlock</code> prevents
+      paging and <code>Publisher::prefault</code> fault-maps all ring pages at startup, eliminating
+      page-fault jitter on the hot path. NUMA placement helpers
+      (<code>set_numa_preferred</code>, <code>reset_numa_policy</code>) allow the ring to be
+      allocated on the publisher's NUMA node, reducing cross-socket coherence costs.
+    </p>
+
+    <h2 id="results">Benchmark Results</h2>
+
+    <p>All measurements on Intel i7-10700KF (Comet Lake), Linux 6.8, Rust 1.93.1, <code>--release</code>:</p>
+
+    <ul style="margin-left:24px;margin-bottom:16px;">
+      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">Publish only:</strong> 2.8&nbsp;ns (vs 30.6&nbsp;ns for disruptor-rs) &mdash; 10.9x faster</li>
+      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">Cross-thread roundtrip:</strong> 95&nbsp;ns (vs 138&nbsp;ns) &mdash; 1.45x faster</li>
+      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">One-way latency p50 (RDTSC):</strong> 48&nbsp;ns &mdash; within 20% of the bare L3 snoop floor</li>
+      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">One-way latency p99 (RDTSC):</strong> 66&nbsp;ns</li>
+      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">Sustained throughput:</strong> ~300M msg/s</li>
+      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">Fanout to 10 subscribers:</strong> 17.0&nbsp;ns total, 1.7&nbsp;ns per subscriber</li>
+      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">SubscriberGroup (10 logical):</strong> ~4&nbsp;ns total, 0.2&nbsp;ns per logical consumer</li>
+    </ul>
+
+    <p>
+      The 48&nbsp;ns p50 one-way figure is consistent with theoretical expectation: the L3 snoop
+      latency on Comet Lake is ~40&ndash;55&nbsp;ns. Photon Ring adds approximately 5&ndash;10&nbsp;ns
+      of software overhead above the hardware floor (stamp check, cursor increment, function call).
+    </p>
+
+    <h2 id="conclusion">Conclusion</h2>
+
+    <p>
+      Stamp-in-slot co-location eliminates the second cache-line transfer that sequence-barrier
+      designs pay on every receive. Combined with per-consumer local cursors (no shared read-path
+      state) and the <code>Pod</code> constraint (torn reads are safe to discard), Photon Ring
+      achieves near-hardware latency for broadcast inter-thread messaging in Rust.
+    </p>
+    <p>
+      The design is sound under the Rust memory model, <code>no_std</code> compatible with
+      <code>alloc</code>, and scales from embedded targets to server-class NUMA systems.
+      The <code>SubscriberGroup</code> fanout mechanism and the <code>Pipeline</code> topology
+      builder extend the primitive to multi-stage, multi-consumer architectures without
+      sacrificing the fundamental one-cache-line-per-receive invariant.
+    </p>
+
+  </div>
+</div>
+
+<footer>
+  <div class="container">
+    Licensed under <a href="https://github.com/userFRM/photon-ring/blob/master/LICENSE-APACHE" target="_blank" rel="noopener">Apache-2.0</a>.
+    &copy; 2026 Photon Ring Contributors.
+    &mdash; <a href="index.html">Back to home</a>
+  </div>
+</footer>
+
+</body>
+</html>
