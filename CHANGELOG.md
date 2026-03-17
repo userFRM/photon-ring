@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-03-17
+
+### Breaking Changes
+- **`T: Copy` replaced with `unsafe trait Pod`** across the entire public API.
+  `Pod` requires every bit pattern to be valid, excluding `bool`, `char`,
+  `NonZero*`, and references. Pre-implemented for all numeric primitives,
+  arrays of `Pod`, and tuples up to 12 elements. User structs require
+  `unsafe impl photon_ring::Pod for MyStruct {}`.
+
+### Added
+- **`Pod` marker trait** (`src/pod.rs`): enforces seqlock-safe payloads at the
+  type level, not just in documentation.
+- **`photon-ring-derive` crate** (optional `derive` feature):
+  `#[derive(photon_ring::DerivePod)]` generates `unsafe impl Pod` with
+  compile-time field verification.
+- **`try_publisher()`** on `Photon<T>` and `TypedBus`: returns `Option`
+  instead of panicking when the publisher was already taken.
+- **`docs/benchmark-methodology.md`**: full benchmark reproducibility
+  documentation (hardware, OS, toolchain, Criterion config, caveats).
+- **Verification README strengthened**: explicit SPMC-only, SC-only, no-MPMC
+  limitations documented.
+- Tuple `Pod` impls extended to arity 12 (matching `std`).
+
+## [1.0.1] - 2026-03-17
+
+### Changed
+- Updated benchmark numbers for both machines (Intel + M1 Pro).
+- Added project banner.
+- Throughput reported with variance ranges.
+
 ## [1.0.0] - 2026-03-16
 
 ### Added
