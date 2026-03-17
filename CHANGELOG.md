@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-03-17
+
+### Fixed
+- Removed unnecessary `unsafe` from `__cpuid_count` (safe since Rust 1.94).
+- Fixed clippy `manual-is-multiple-of` lint in backpressure example.
+
+### Changed
+- MSRV bumped to 1.94.
+- CI now auto-publishes to crates.io on tagged releases via `CARGO_REGISTRY_TOKEN`.
+
 ## [2.1.0] - 2026-03-17
 
 ### Fixed

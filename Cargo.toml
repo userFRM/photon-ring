@@ -1,6 +1,6 @@
 [package]
 name = "photon-ring"
-version = "2.1.0"
+version = "2.1.1"
 edition = "2021"
 rust-version = "1.94"
 description = "Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."

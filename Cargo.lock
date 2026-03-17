@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "photon-ring"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "core_affinity2",
  "criterion",
