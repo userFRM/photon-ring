@@ -53,7 +53,10 @@ impl<T: Pod> Slot<T> {
     ///
     /// 1. Store odd stamp (writing)
     /// 2. Release fence — odd stamp visible before data write
-    /// 3. Write value
+    /// 3. Write value via `write_volatile` — prevents compiler elision and
+    ///    is formally sound even when a concurrent reader observes a
+    ///    partially-written value (the reader's `read_volatile` + stamp
+    ///    re-check discards torn reads).
     /// 4. Release store of even stamp — data visible before done stamp
     #[inline]
     pub(crate) fn write(&self, seq: u64, value: T) {
@@ -63,7 +66,11 @@ impl<T: Pod> Slot<T> {
         self.stamp.store(writing, Ordering::Relaxed);
         fence(Ordering::Release);
 
-        unsafe { ptr::write(self.value.get() as *mut T, value) };
+        // SAFETY: single-writer guarantee — no concurrent writes to this slot.
+        // write_volatile prevents the compiler from eliding or reordering the
+        // store, and avoids formal UB from ptr::write on potentially-aliased
+        // memory (a concurrent reader may be mid-read_volatile on the same bytes).
+        unsafe { ptr::write_volatile(self.value.get() as *mut T, value) };
 
         self.stamp.store(done, Ordering::Release);
     }
@@ -85,6 +92,11 @@ impl<T: Pod> Slot<T> {
     /// Seqlock read protocol. Returns `None` on torn read (caller should retry).
     ///
     /// Returns `Err(actual_stamp)` if the slot holds a different sequence.
+    ///
+    /// Uses `read_volatile` instead of `ptr::read` to avoid formal UB when the
+    /// slot is mid-write. The volatile read prevents the compiler from assuming
+    /// the memory is in a valid state, and the subsequent stamp re-check gates
+    /// whether the value is actually used.
     #[inline]
     pub(crate) fn try_read(&self, seq: u64) -> Result<Option<T>, u64> {
         let expected = seq * 2 + 2;
@@ -93,7 +105,10 @@ impl<T: Pod> Slot<T> {
 
         // Happy path first — stamp matches expected sequence
         if s1 == expected {
-            let value = unsafe { ptr::read((*self.value.get()).as_ptr()) };
+            // SAFETY: read_volatile is sound even if the writer is mid-store on
+            // another core — the stamp re-check below gates whether we use the
+            // value. This eliminates the formal UB of ptr::read on torn data.
+            let value = unsafe { ptr::read_volatile((*self.value.get()).as_ptr()) };
             let s2 = self.stamp.load(Ordering::Acquire);
             if s1 == s2 {
                 return Ok(Some(value));

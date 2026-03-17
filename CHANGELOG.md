@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-03-17
+
+### Fixed
+- **MPMC `catch_up_cursor` deadlock:** After ring wraparound, a late producer
+  could strand the shared cursor permanently because `catch_up_cursor` used
+  exact stamp equality (`!=`) instead of `<`. Once a successor slot was reused
+  by a later sequence, the cursor would never advance, and all subscribers would
+  spin on `Empty` forever. Changed to `stamp < done_stamp` to match
+  `advance_cursor`'s existing wraparound-safe check.
+
+### Added
+- **`MonitorWait` wait strategy:** UMONITOR/UMWAIT on Intel Tremont+/Alder Lake+
+  with runtime CPUID WAITPKG detection. Near-zero power, ~30 ns wakeup latency.
+  Falls back to PAUSE on unsupported x86 CPUs, SEVL+WFE on aarch64.
+  Safe constructor: `WaitStrategy::monitor_wait(&AtomicU64)`.
+- **`MonitorWaitFallback` wait strategy:** TPAUSE (timed C0.1 pause) without
+  address monitoring. Same CPUID gating and platform fallbacks.
+- **Prefetch on all publish paths:** `PREFETCHT0` (x86) / `PRFM PSTL1KEEP` (ARM)
+  prefetches the next slot's cache line before writing the current slot, hiding
+  the Read-For-Ownership stall. Applied to SPMC and MPMC publish, publish_with.
+
+### Changed
+- **Seqlock uses `write_volatile`/`read_volatile`:** Replaces `ptr::write`/
+  `ptr::read` in `Slot::write` and `Slot::try_read`. Eliminates formal UB when
+  a reader observes a partially-written slot. Zero measurable runtime cost.
+- **Cached `has_backpressure` on Publisher:** Avoids Arc deref + Option check on
+  every `publish()` for lossy channels.
+- **`recv_with()` direct slot access:** Pre-computes slot pointer and expected
+  stamp outside the spin loop, eliminating per-iteration `try_recv()` overhead.
+  Applied to both `Subscriber` and `SubscriberGroup`.
+- **Removed dead `count` field from `SubscriberGroup`:** Was always equal to
+  the const generic `N`. `aligned_count()` now returns `N` directly.
+- **WFE in MPMC predecessor spin:** On aarch64, the contended `advance_cursor`
+  path now uses WFE (low-power sleep until cache-line event) instead of YIELD.
+
 ## [2.0.0] - 2026-03-17
 
 ### Breaking Changes

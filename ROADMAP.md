@@ -70,7 +70,7 @@
 
 ### Platform-Specific Optimizations (DONE)
 - [x] ARM `WFE` instruction in `BackoffSpin` and `YieldSpin` (aarch64)
-- [x] UMWAIT/TPAUSE documented as future work (requires Tremont+ hardware)
+- [x] UMWAIT/TPAUSE implemented as `MonitorWait`/`MonitorWaitFallback` with runtime CPUID detection
 - [x] SPMC vs MPMC benchmark comparison (2.8 ns vs 11.7 ns, 4.2x CAS overhead)
 - [ ] RISC-V `WRS` (wait-on-reservation-set) when available
 

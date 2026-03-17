@@ -8,6 +8,35 @@ use crate::wait::WaitStrategy;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+/// Prefetch the next slot's cache line with write intent.
+///
+/// On **x86/x86_64**: emits `PREFETCHT0` — universally supported (SSE).
+/// Brings the line into L1, hiding the RFO stall on the next publish.
+///
+/// On **aarch64**: emits `PRFM PSTL1KEEP` — prefetch for store, L1, temporal.
+///
+/// On other platforms: no-op.
+#[inline(always)]
+fn prefetch_write_next<T>(slots_ptr: *const Slot<T>, next_idx: u64) {
+    let ptr = unsafe { slots_ptr.add(next_idx as usize) as *const u8 };
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::x86_64::_mm_prefetch(ptr as *const i8, core::arch::x86_64::_MM_HINT_T0);
+    }
+    #[cfg(target_arch = "x86")]
+    unsafe {
+        core::arch::x86::_mm_prefetch(ptr as *const i8, core::arch::x86::_MM_HINT_T0);
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("prfm pstl1keep, [{ptr}]", ptr = in(reg) ptr, options(nostack, preserves_flags));
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")))]
+    {
+        let _ = ptr;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -52,6 +81,9 @@ pub struct Publisher<T: Pod> {
     /// Cached minimum cursor from the last tracker scan. Used as a fast-path
     /// check to avoid scanning on every `try_publish` call.
     cached_slowest: u64,
+    /// Cached backpressure flag. Avoids Arc deref + Option check on every
+    /// publish() for lossy channels. Immutable after construction.
+    has_backpressure: bool,
 }
 
 unsafe impl<T: Pod> Send for Publisher<T> {}
@@ -65,6 +97,7 @@ impl<T: Pod> Publisher<T> {
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
         // Index is masked to stay within the allocated slot array.
         let slot = unsafe { &*self.slots_ptr.add((self.seq & self.mask) as usize) };
+        prefetch_write_next(self.slots_ptr, (self.seq + 1) & self.mask);
         slot.write(self.seq, value);
         // SAFETY: cursor_ptr points to ring.cursor.0, kept alive by self.ring.
         unsafe { &*self.cursor_ptr }.store(self.seq, Ordering::Release);
@@ -93,6 +126,7 @@ impl<T: Pod> Publisher<T> {
     pub fn publish_with(&mut self, f: impl FnOnce(&mut core::mem::MaybeUninit<T>)) {
         // SAFETY: see publish_unchecked.
         let slot = unsafe { &*self.slots_ptr.add((self.seq & self.mask) as usize) };
+        prefetch_write_next(self.slots_ptr, (self.seq + 1) & self.mask);
         slot.write_with(self.seq, f);
         unsafe { &*self.cursor_ptr }.store(self.seq, Ordering::Release);
         self.seq += 1;
@@ -106,7 +140,7 @@ impl<T: Pod> Publisher<T> {
     /// backpressure check.
     #[inline]
     pub fn publish(&mut self, value: T) {
-        if self.ring.backpressure.is_some() {
+        if self.has_backpressure {
             let mut v = value;
             loop {
                 match self.try_publish(v) {
@@ -169,7 +203,7 @@ impl<T: Pod> Publisher<T> {
         if values.is_empty() {
             return;
         }
-        if self.ring.backpressure.is_some() {
+        if self.has_backpressure {
             for &v in values.iter() {
                 let mut val = v;
                 loop {
@@ -308,7 +342,6 @@ impl<T: Pod> Subscribable<T> {
             slots_ptr,
             mask,
             cursor: start,
-            count: N,
             total_lagged: 0,
             total_received: 0,
             tracker,
@@ -455,6 +488,35 @@ impl<T: Pod> Subscriber<T> {
     /// ```
     #[inline]
     pub fn recv_with(&mut self, strategy: WaitStrategy) -> T {
+        let slot = unsafe { &*self.slots_ptr.add((self.cursor & self.mask) as usize) };
+        let expected = self.cursor * 2 + 2;
+        let mut iter: u32 = 0;
+        loop {
+            match slot.try_read(self.cursor) {
+                Ok(Some(value)) => {
+                    self.cursor += 1;
+                    self.update_tracker();
+                    self.total_received += 1;
+                    return value;
+                }
+                Ok(None) => {
+                    strategy.wait(iter);
+                    iter = iter.saturating_add(1);
+                }
+                Err(stamp) => {
+                    if stamp >= expected {
+                        return self.recv_with_slow(strategy);
+                    }
+                    strategy.wait(iter);
+                    iter = iter.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn recv_with_slow(&mut self, strategy: WaitStrategy) -> T {
         let mut iter: u32 = 0;
         loop {
             match self.try_recv() {
@@ -464,7 +526,6 @@ impl<T: Pod> Subscriber<T> {
                     iter = iter.saturating_add(1);
                 }
                 Err(TryRecvError::Lagged { .. }) => {
-                    // Cursor was advanced by try_recv — retry immediately.
                     iter = 0;
                 }
             }
@@ -694,8 +755,6 @@ pub struct SubscriberGroup<T: Pod, const N: usize> {
     mask: u64,
     /// Single cursor shared by all `N` logical subscribers.
     cursor: u64,
-    /// Number of logical subscribers in this group (always `N`).
-    count: usize,
     /// Cumulative messages skipped due to lag.
     total_lagged: u64,
     /// Cumulative messages successfully received.
@@ -779,6 +838,36 @@ impl<T: Pod, const N: usize> SubscriberGroup<T, N> {
     /// ```
     #[inline]
     pub fn recv_with(&mut self, strategy: WaitStrategy) -> T {
+        let cur = self.cursor;
+        let slot = unsafe { &*self.slots_ptr.add((cur & self.mask) as usize) };
+        let expected = cur * 2 + 2;
+        let mut iter: u32 = 0;
+        loop {
+            match slot.try_read(cur) {
+                Ok(Some(value)) => {
+                    self.cursor = cur + 1;
+                    self.total_received += 1;
+                    self.update_tracker();
+                    return value;
+                }
+                Ok(None) => {
+                    strategy.wait(iter);
+                    iter = iter.saturating_add(1);
+                }
+                Err(stamp) => {
+                    if stamp >= expected {
+                        return self.recv_with_slow(strategy);
+                    }
+                    strategy.wait(iter);
+                    iter = iter.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn recv_with_slow(&mut self, strategy: WaitStrategy) -> T {
         let mut iter: u32 = 0;
         loop {
             match self.try_recv() {
@@ -800,7 +889,7 @@ impl<T: Pod, const N: usize> SubscriberGroup<T, N> {
     /// so this trivially returns `N`.
     #[inline]
     pub fn aligned_count(&self) -> usize {
-        self.count
+        N
     }
 
     /// Number of messages available to read (capped at ring capacity).
@@ -913,6 +1002,7 @@ pub fn channel<T: Pod>(capacity: usize) -> (Publisher<T>, Subscribable<T>) {
     let cursor_ptr = ring.cursor_ptr();
     (
         Publisher {
+            has_backpressure: ring.backpressure.is_some(),
             ring: ring.clone(),
             slots_ptr,
             mask,
@@ -969,6 +1059,7 @@ pub fn channel_bounded<T: Pod>(
     let cursor_ptr = ring.cursor_ptr();
     (
         Publisher {
+            has_backpressure: ring.backpressure.is_some(),
             ring: ring.clone(),
             slots_ptr,
             mask,
@@ -1046,6 +1137,7 @@ impl<T: Pod> MpPublisher<T> {
         let seq = next_seq_atomic.fetch_add(1, Ordering::Relaxed);
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
         let slot = unsafe { &*self.slots_ptr.add((seq & self.mask) as usize) };
+        prefetch_write_next(self.slots_ptr, (seq + 1) & self.mask);
         slot.write(seq, value);
         self.advance_cursor(seq);
     }
@@ -1072,6 +1164,7 @@ impl<T: Pod> MpPublisher<T> {
         let seq = next_seq_atomic.fetch_add(1, Ordering::Relaxed);
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
         let slot = unsafe { &*self.slots_ptr.add((seq & self.mask) as usize) };
+        prefetch_write_next(self.slots_ptr, (seq + 1) & self.mask);
         slot.write_with(seq, f);
         self.advance_cursor(seq);
     }
@@ -1127,7 +1220,21 @@ impl<T: Pod> MpPublisher<T> {
             let pred_done = (seq - 1) * 2 + 2;
             // Check stamp >= pred_done to handle rare ring-wrap case where
             // a later sequence already overwrote the predecessor's slot.
+            //
+            // On aarch64: SEVL before the loop sets the event register so the
+            // first WFE returns immediately (avoids unconditional block).
+            // Subsequent WFE calls sleep until a cache-line invalidation
+            // (the predecessor's stamp store) wakes the core.
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                core::arch::asm!("sevl", options(nomem, nostack));
+            }
             while pred_slot.stamp_load() < pred_done {
+                #[cfg(target_arch = "aarch64")]
+                unsafe {
+                    core::arch::asm!("wfe", options(nomem, nostack));
+                }
+                #[cfg(not(target_arch = "aarch64"))]
                 core::hint::spin_loop();
             }
         }
@@ -1165,7 +1272,7 @@ impl<T: Pod> MpPublisher<T> {
             // Check if the next slot's stamp shows a completed write.
             let done_stamp = next * 2 + 2;
             let slot = unsafe { &*self.slots_ptr.add((next & self.mask) as usize) };
-            if slot.stamp_load() != done_stamp {
+            if slot.stamp_load() < done_stamp {
                 break;
             }
             // Slot is committed — try to advance cursor.
