@@ -128,14 +128,12 @@ impl Default for WaitStrategy {
 fn has_waitpkg() -> bool {
     #[cfg(target_arch = "x86_64")]
     {
-        #[allow(unused_unsafe)]
-        let result = unsafe { core::arch::x86_64::__cpuid_count(7, 0) };
+        let result = core::arch::x86_64::__cpuid_count(7, 0);
         result.ecx & (1 << 5) != 0
     }
     #[cfg(target_arch = "x86")]
     {
-        #[allow(unused_unsafe)]
-        let result = unsafe { core::arch::x86::__cpuid_count(7, 0) };
+        let result = core::arch::x86::__cpuid_count(7, 0);
         result.ecx & (1 << 5) != 0
     }
 }
