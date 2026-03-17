@@ -905,8 +905,8 @@ Write protocol:                Read protocol:
     <!-- Charts -->
     <div class="chart-row" style="margin-top:40px;">
       <div class="chart-card">
-        <div class="chart-title">One-way Latency Distribution (RDTSC, Intel i7-10700KF)</div>
-        <div class="chart-sub">Message count per latency bucket &mdash; Photon Ring vs disruptor-rs (estimated)</div>
+        <div class="chart-title">Cross-thread roundtrip latency distribution</div>
+        <div class="chart-sub">100,000,000 samples per library &mdash; Intel i7-10700KF, no core pinning</div>
         <div class="chart-container">
           <canvas id="latencyHistogram"></canvas>
         </div>
@@ -1477,9 +1477,10 @@ consumer.<span class="fn_">join</span>().<span class="fn_">unwrap</span>();</pre
                           '512-1K', '1-2K', '2-4K', '4-8K', '8K+'];
 
     /* Photon Ring: 90%+ of samples cluster in 32-64 ns range (p50=48, p90=61) */
-    const photonData    = [0, 5000, 85000, 8000, 1500, 300, 150, 40, 8, 2];
-    /* disruptor-rs: heavier tail, most samples 128-256 ns */
-    const disruptorData = [0,    0,  2000, 50000, 35000, 8000, 3000, 1500, 400, 100];
+    /* Real data: 100,000,000 samples per library on Intel i7-10700KF */
+    const photonData    = [414, 99743738, 194601, 6953, 1060, 739, 33440, 9633, 3527, 139];
+    const disruptorData = [19, 395135, 99494583, 25924, 2253, 1106, 53900, 13605, 5307, 287];
+    const crossbeamData = [0, 8340, 66789385, 32511955, 585843, 1842, 63819, 19673, 7053, 329];
 
     new Chart(document.getElementById('latencyHistogram'), {
       type: 'bar',
@@ -1495,10 +1496,18 @@ consumer.<span class="fn_">join</span>().<span class="fn_">unwrap</span>();</pre
             borderRadius: 2,
           },
           {
-            label: 'disruptor-rs (estimated)',
+            label: 'disruptor-rs (measured)',
             data: disruptorData,
             backgroundColor: DISRUPT_AMBER,
             borderColor: 'rgba(227,179,65,0.9)',
+            borderWidth: 1,
+            borderRadius: 2,
+          },
+          {
+            label: 'crossbeam-channel (measured)',
+            data: crossbeamData,
+            backgroundColor: 'rgba(249,117,131,0.65)',
+            borderColor: 'rgba(249,117,131,0.9)',
             borderWidth: 1,
             borderRadius: 2,
           },
@@ -1524,7 +1533,7 @@ consumer.<span class="fn_">join</span>().<span class="fn_">unwrap</span>();</pre
             title: { display: true, text: 'Sample count', color: '#8b949e' },
             grid: { color: 'rgba(48,54,61,0.6)' },
             ticks: {
-              callback: (v) => v >= 1000 ? (v / 1000) + 'K' : v,
+              callback: (v) => v >= 1000000 ? (v / 1000000) + 'M' : v >= 1000 ? (v / 1000) + 'K' : v,
             },
           },
         },
