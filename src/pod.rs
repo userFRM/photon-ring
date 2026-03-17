@@ -28,6 +28,45 @@
 /// 3. Every possible bit pattern of `size_of::<T>()` bytes is a valid `T`.
 /// 4. `T` has no padding bytes that carry validity constraints.
 ///
+/// # What types are NOT `Pod`?
+///
+/// | Type | Why | What to use instead |
+/// |---|---|---|
+/// | `bool` | Only 0 and 1 are valid | `u8` (0 = false, 1 = true) |
+/// | `char` | Must be valid Unicode scalar | `u32` |
+/// | `NonZero<u32>` | Zero is invalid | `u32` |
+/// | `Option<T>` | Discriminant has invalid patterns | `u8` sentinel (e.g., 255 = None) |
+/// | `enum` (Rust) | Only declared variants are valid | `u8` or `u32` with constants |
+/// | `&T`, `&str` | Pointer must be valid | Not supported — use value types |
+/// | `String`, `Vec` | Heap-allocated, has `Drop` | Fixed `[u8; N]` buffer |
+///
+/// # Converting real-world types
+///
+/// A common pattern: your domain model uses enums and `Option`, but the
+/// Photon Ring message struct uses plain integers:
+///
+/// ```rust
+/// // Domain type (NOT Pod — has Option and enum)
+/// // enum Side { Buy, Sell }
+/// // struct Order { price: f64, qty: u32, side: Side, tag: Option<u32> }
+///
+/// // Photon Ring message (Pod — all fields are plain numerics)
+/// #[repr(C)]
+/// #[derive(Clone, Copy)]
+/// struct OrderMsg {
+///     price: f64,
+///     qty: u32,
+///     side: u8,      // 0 = Buy, 1 = Sell
+///     tag: u32,      // 0 = None, nonzero = Some(value)
+///     _pad: [u8; 3], // explicit padding for alignment
+/// }
+/// unsafe impl photon_ring::Pod for OrderMsg {}
+///
+/// // Convert at the boundary:
+/// // let msg = OrderMsg { price: 100.0, qty: 10, side: 0, tag: 0, _pad: [0;3] };
+/// // publisher.publish(msg);
+/// ```
+///
 /// # Pre-implemented types
 ///
 /// `Pod` is implemented for all primitive numeric types, arrays of `Pod`

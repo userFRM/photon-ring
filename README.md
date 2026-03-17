@@ -295,7 +295,18 @@ Rust/C++ abstract memory model, this concurrent access is formally a data race, 
 is correct on all real hardware for `T: Copy` types without validity invariants.
 
 Recommended payloads: `u64`, `f64`, `[u8; N]`, `#[repr(C)]` structs of plain numerics.
-Avoid: `bool`, `char`, `NonZero*`, references.
+
+**Common conversions for types that are NOT `Pod`:**
+
+| Instead of | Use | Example |
+|---|---|---|
+| `bool` | `u8` | `0` = false, `1` = true |
+| `enum { A, B, C }` | `u8` | `0` = A, `1` = B, `2` = C |
+| `Option<u32>` | `u32` | `0` = None, nonzero = Some |
+| `Option<Enum>` | `u8` | `255` = None |
+| `String` / `&str` | `[u8; N]` | Fixed-size buffer |
+
+Parse at the boundary, publish as a struct of plain numerics. See [`Pod` trait docs](https://docs.rs/photon-ring/latest/photon_ring/trait.Pod.html) for full guidance.
 
 ## Running
 
