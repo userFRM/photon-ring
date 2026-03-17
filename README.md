@@ -131,19 +131,28 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
 ### Core operations
 
 ```
-                                          Intel i7-10700KF    Apple M1 Pro
-                                          ────────────────    ────────────
-  Publish only                                    2.8 ns          2.4 ns
-  Roundtrip (1 sub, same thread)                  2.7 ns          8.8 ns
-  Fanout (10 independent subs)                   17.0 ns         27.7 ns
-  SubscriberGroup (any N, O(1))                   2.6 ns          8.8 ns
-  MPMC (1 pub, 1 sub)                            12.1 ns         10.6 ns
-  Empty poll                                      0.85 ns         1.1 ns
-  Batch 64 + drain                              158   ns        282   ns
-  Struct roundtrip (24B Pod)                      4.8 ns          9.3 ns
-  Cross-thread roundtrip                         95   ns        130   ns
-  One-way latency (RDTSC)                        48   ns p50        —
+                                    i7-10700KF     M1 Pro
+                                    ──────────     ──────
+  Publish only                        2.8 ns      2.4 ns
+  Roundtrip (1 sub, same thread)      2.7 ns      8.8 ns
+  Fanout (10 independent subs)       17.0 ns     27.7 ns
+  SubscriberGroup (any N, O(1))       2.6 ns      8.8 ns
+  MPMC (1 pub, 1 sub)                12.1 ns     10.6 ns
+  Empty poll                          0.9 ns      1.1 ns
+  Batch 64 + drain                    158 ns      282 ns
+  Struct roundtrip (24B Pod)          4.8 ns      9.3 ns
+  Cross-thread roundtrip               95 ns      130 ns
+  One-way latency (RDTSC)             48 ns p50     —
 ```
+
+### Latency distribution
+
+100,000 cross-thread roundtrip samples on Intel i7-10700KF, no core pinning:
+
+![Latency histogram](docs/images/latency-histogram.png)
+
+Photon Ring: **99.9% of samples in the 96-128 ns bucket** (p50 = 107 ns, p99 = 116 ns).
+crossbeam-channel spreads across 128-256 ns (p50 = 193 ns, p99 = 250 ns).
 
 ### Throughput
 
