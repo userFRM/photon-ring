@@ -41,7 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `#[repr(u8)]` enums → `u8`, `usize` → `u64` transparently. Generates
   `{Name}Wire` struct + `From` conversions + `unsafe impl Pod`. Structs with
   enum fields use `unsafe fn into_domain()` instead of safe `From`.
-- 9 new tests for Message derive (roundtrip, bool, option, enum, arrays, publish).
+- 17 tests for Message derive (roundtrip, bool, option zero/none/max, enum,
+  arrays, publish, float precision, u128/i128/usize/isize options).
 
 ### Changed
 - Refactored `channel.rs` (1451 lines) into `channel/` module directory (7 files).
