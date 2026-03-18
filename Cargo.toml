@@ -30,6 +30,7 @@ core_affinity2 = "0.15.4"
 criterion = "0.8.2"
 crossbeam-channel = "0.5"
 disruptor = "4.0.0"
+libc = "0.2.183"
 
 [[example]]
 name = "market_data"
@@ -56,6 +57,10 @@ harness = false
 
 [[bench]]
 name = "payload_scaling"
+harness = false
+
+[[bench]]
+name = "prefetchw_crosscore"
 harness = false
 
 [package.metadata.docs.rs]

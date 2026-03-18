@@ -87,12 +87,26 @@ impl<T: Pod, const N: usize> SubscriberGroup<T, N> {
     }
 
     /// Spin until the next message is available.
+    ///
+    /// On aarch64: uses SEVL + WFE for near-zero-power cache-line-event
+    /// wakeup. On x86: uses PAUSE (spin_loop hint).
     #[inline]
     pub fn recv(&mut self) -> T {
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            core::arch::asm!("sevl", options(nomem, nostack));
+        }
         loop {
             match self.try_recv() {
                 Ok(val) => return val,
-                Err(TryRecvError::Empty) => core::hint::spin_loop(),
+                Err(TryRecvError::Empty) => {
+                    #[cfg(target_arch = "aarch64")]
+                    unsafe {
+                        core::arch::asm!("wfe", options(nomem, nostack));
+                    }
+                    #[cfg(not(target_arch = "aarch64"))]
+                    core::hint::spin_loop();
+                }
                 Err(TryRecvError::Lagged { .. }) => {}
             }
         }

@@ -68,8 +68,19 @@ impl<T: Pod> Subscriber<T> {
                 }
             }
         }
-        // Phase 2: PAUSE-based spin — power efficient
+        // Phase 2: power-efficient spin.
+        // On aarch64: SEVL + WFE loop — the core sleeps until a cache-line
+        // invalidation event (the publisher's stamp store), waking in ~12 ns.
+        // On x86: PAUSE yields the pipeline to the SMT sibling (~140 cycles).
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            core::arch::asm!("sevl", options(nomem, nostack));
+        }
         loop {
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                core::arch::asm!("wfe", options(nomem, nostack));
+            }
             match slot.try_read(self.cursor) {
                 Ok(Some(value)) => {
                     self.cursor += 1;
@@ -77,9 +88,13 @@ impl<T: Pod> Subscriber<T> {
                     self.total_received += 1;
                     return value;
                 }
-                Ok(None) => core::hint::spin_loop(),
+                Ok(None) => {
+                    #[cfg(not(target_arch = "aarch64"))]
+                    core::hint::spin_loop();
+                }
                 Err(stamp) => {
                     if stamp < expected {
+                        #[cfg(not(target_arch = "aarch64"))]
                         core::hint::spin_loop();
                     } else {
                         return self.recv_slow();
