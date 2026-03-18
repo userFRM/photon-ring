@@ -116,10 +116,18 @@ enum FieldKind {
     Usize,
     /// `isize` → `i64`.
     Isize,
-    /// `Option<T>` where T is an integer type.
+    /// `Option<T>` where T is a ≤64-bit integer type.
     /// Wire struct gets two fields: `X_value: u64` and `X_has: u8`.
     /// Stores the inner type for the back-conversion cast.
     OptionInt(Type),
+    /// `Option<u128>` — wire struct gets `X_value: u128` and `X_has: u8`.
+    OptionU128,
+    /// `Option<i128>` — wire struct gets `X_value: u128` and `X_has: u8`.
+    OptionI128,
+    /// `Option<usize>` — wire struct gets `X_value: u64` and `X_has: u8`.
+    OptionUsize,
+    /// `Option<isize>` — wire struct gets `X_value: i64` and `X_has: u8`.
+    OptionIsize,
     /// `Option<f32>` — wire struct gets `X_value: u64` (bit-encoded) and `X_has: u8`.
     OptionF32,
     /// `Option<f64>` — wire struct gets `X_value: u64` (bit-encoded) and `X_has: u8`.
@@ -188,18 +196,19 @@ fn classify(ty: &Type) -> FieldKind {
                     // Extract inner type from Option<T>
                     if let PathArguments::AngleBracketed(args) = &seg.arguments {
                         if let Some(GenericArgument::Type(inner)) = args.args.first() {
-                            if is_numeric(inner) {
-                                let name = type_name(inner).unwrap_or_default();
-                                return match name.as_str() {
-                                    "f32" => FieldKind::OptionF32,
-                                    "f64" => FieldKind::OptionF64,
-                                    _ => FieldKind::OptionInt(inner.clone()),
-                                };
-                            }
+                            let name = type_name(inner).unwrap_or_default();
+                            return match name.as_str() {
+                                "f32" => FieldKind::OptionF32,
+                                "f64" => FieldKind::OptionF64,
+                                "u128" => FieldKind::OptionU128,
+                                "i128" => FieldKind::OptionI128,
+                                "usize" => FieldKind::OptionUsize,
+                                "isize" => FieldKind::OptionIsize,
+                                _ if is_numeric(inner) => FieldKind::OptionInt(inner.clone()),
+                                _ => FieldKind::Enum, // unsupported Option<T>
+                            };
                         }
                     }
-                    // Non-numeric Option — not supported, will be caught by
-                    // the compile-time size assertion below.
                     FieldKind::Enum
                 }
 
@@ -348,6 +357,94 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
                 from_wire.push(quote! {
                     #fname: if src.#has_field != 0 {
                         Some(src.#value_field as #inner)
+                    } else {
+                        None
+                    }
+                });
+            }
+            FieldKind::OptionU128 => {
+                let value_field = format_ident!("{}_value", fname);
+                let has_field = format_ident!("{}_has", fname);
+                wire_fields.push(quote! { pub #value_field: u128 });
+                wire_fields.push(quote! { pub #has_field: u8 });
+                to_wire.push(quote! {
+                    #value_field: match src.#fname {
+                        Some(v) => v,
+                        None => 0,
+                    }
+                });
+                to_wire.push(quote! {
+                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
+                });
+                from_wire.push(quote! {
+                    #fname: if src.#has_field != 0 {
+                        Some(src.#value_field)
+                    } else {
+                        None
+                    }
+                });
+            }
+            FieldKind::OptionI128 => {
+                let value_field = format_ident!("{}_value", fname);
+                let has_field = format_ident!("{}_has", fname);
+                wire_fields.push(quote! { pub #value_field: u128 });
+                wire_fields.push(quote! { pub #has_field: u8 });
+                to_wire.push(quote! {
+                    #value_field: match src.#fname {
+                        Some(v) => v as u128,
+                        None => 0,
+                    }
+                });
+                to_wire.push(quote! {
+                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
+                });
+                from_wire.push(quote! {
+                    #fname: if src.#has_field != 0 {
+                        Some(src.#value_field as i128)
+                    } else {
+                        None
+                    }
+                });
+            }
+            FieldKind::OptionUsize => {
+                let value_field = format_ident!("{}_value", fname);
+                let has_field = format_ident!("{}_has", fname);
+                wire_fields.push(quote! { pub #value_field: u64 });
+                wire_fields.push(quote! { pub #has_field: u8 });
+                to_wire.push(quote! {
+                    #value_field: match src.#fname {
+                        Some(v) => v as u64,
+                        None => 0,
+                    }
+                });
+                to_wire.push(quote! {
+                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
+                });
+                from_wire.push(quote! {
+                    #fname: if src.#has_field != 0 {
+                        Some(src.#value_field as usize)
+                    } else {
+                        None
+                    }
+                });
+            }
+            FieldKind::OptionIsize => {
+                let value_field = format_ident!("{}_value", fname);
+                let has_field = format_ident!("{}_has", fname);
+                wire_fields.push(quote! { pub #value_field: i64 });
+                wire_fields.push(quote! { pub #has_field: u8 });
+                to_wire.push(quote! {
+                    #value_field: match src.#fname {
+                        Some(v) => v as i64,
+                        None => 0,
+                    }
+                });
+                to_wire.push(quote! {
+                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
+                });
+                from_wire.push(quote! {
+                    #fname: if src.#has_field != 0 {
+                        Some(src.#value_field as isize)
                     } else {
                         None
                     }

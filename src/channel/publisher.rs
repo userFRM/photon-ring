@@ -200,15 +200,13 @@ impl<T: Pod> Publisher<T> {
             }
             return;
         }
-        for (i, &v) in values.iter().enumerate() {
-            let seq = self.seq + i as u64;
-            // SAFETY: see publish_unchecked.
-            let slot = unsafe { &*self.slots_ptr.add((seq & self.mask) as usize) };
-            slot.write(seq, v);
+        // Write each slot and advance the cursor per-value to maintain the
+        // "future-only subscribe" invariant: subscribe() snapshots the cursor,
+        // so any slot written before the cursor update could be visible to a
+        // subscriber created mid-batch.
+        for &v in values.iter() {
+            self.publish_unchecked(v);
         }
-        let last = self.seq + values.len() as u64 - 1;
-        unsafe { &*self.cursor_ptr }.store(last, Ordering::Release);
-        self.seq += values.len() as u64;
     }
 
     /// Number of messages published so far.
