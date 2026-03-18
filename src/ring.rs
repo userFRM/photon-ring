@@ -107,12 +107,6 @@ impl<T: Pod> SharedRing<T> {
         }
     }
 
-    #[allow(dead_code)]
-    #[inline]
-    pub(crate) fn slot(&self, seq: u64) -> &Slot<T> {
-        unsafe { self.slots.get_unchecked((seq & self.mask) as usize) }
-    }
-
     /// Raw pointer to the start of the slot array.
     #[inline]
     pub(crate) fn slots_ptr(&self) -> *const Slot<T> {
@@ -126,7 +120,7 @@ impl<T: Pod> SharedRing<T> {
     }
 
     /// Total byte length of the slot array.
-    #[allow(dead_code)] // used only with `hugepages` feature
+    #[cfg(all(target_os = "linux", feature = "hugepages"))]
     #[inline]
     pub(crate) fn slots_byte_len(&self) -> usize {
         self.slots.len() * core::mem::size_of::<Slot<T>>()

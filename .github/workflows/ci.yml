@@ -30,6 +30,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-targets
       - run: cargo test --doc
+      - run: cargo test --workspace --all-features
 
   # ── Lint with Clippy ──────────────────────────────────────────────────
   clippy:
@@ -42,6 +43,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-features -- -D warnings
 
   # ── Formatting check ─────────────────────────────────────────────────
   fmt:

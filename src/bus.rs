@@ -1,7 +1,7 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 use crate::channel::{self, Publisher, Subscribable, Subscriber};
 use crate::pod::Pod;
@@ -45,10 +45,9 @@ impl<T: Pod> Photon<T> {
     /// Panics if the publisher for this topic was already taken.
     pub fn publisher(&self, topic: &str) -> Publisher<T> {
         let mut topics = self.topics.lock();
-        if !topics.contains_key(topic) {
-            topics.insert(topic.to_string(), Self::make_entry(self.default_capacity));
-        }
-        let entry = topics.get_mut(topic).unwrap();
+        let entry = topics
+            .entry_ref(topic)
+            .or_insert_with(|| Self::make_entry(self.default_capacity));
         entry
             .publisher
             .take()
@@ -59,30 +58,27 @@ impl<T: Pod> Photon<T> {
     /// publisher was already taken.
     pub fn try_publisher(&self, topic: &str) -> Option<Publisher<T>> {
         let mut topics = self.topics.lock();
-        if !topics.contains_key(topic) {
-            topics.insert(topic.to_string(), Self::make_entry(self.default_capacity));
-        }
-        let entry = topics.get_mut(topic).unwrap();
+        let entry = topics
+            .entry_ref(topic)
+            .or_insert_with(|| Self::make_entry(self.default_capacity));
         entry.publisher.take()
     }
 
     /// Subscribe to a topic (future messages only). Creates the topic if needed.
     pub fn subscribe(&self, topic: &str) -> Subscriber<T> {
         let mut topics = self.topics.lock();
-        if !topics.contains_key(topic) {
-            topics.insert(topic.to_string(), Self::make_entry(self.default_capacity));
-        }
-        let entry = topics.get_mut(topic).unwrap();
+        let entry = topics
+            .entry_ref(topic)
+            .or_insert_with(|| Self::make_entry(self.default_capacity));
         entry.subscribable.subscribe()
     }
 
     /// Get the clone-able subscriber factory for a topic.
     pub fn subscribable(&self, topic: &str) -> Subscribable<T> {
         let mut topics = self.topics.lock();
-        if !topics.contains_key(topic) {
-            topics.insert(topic.to_string(), Self::make_entry(self.default_capacity));
-        }
-        let entry = topics.get_mut(topic).unwrap();
+        let entry = topics
+            .entry_ref(topic)
+            .or_insert_with(|| Self::make_entry(self.default_capacity));
         entry.subscribable.clone()
     }
 

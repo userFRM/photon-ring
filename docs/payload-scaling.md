@@ -6,7 +6,7 @@
 # Payload Scaling Analysis
 
 How does Photon Ring's latency scale with payload size? Since the seqlock protocol
-copies data on both publish (`ptr::write`) and receive (`ptr::read`), larger payloads
+copies data on both publish (`write_volatile`) and receive (`read_volatile`), larger payloads
 incur proportionally higher memcpy cost. This page quantifies the tradeoff.
 
 ## Benchmark Environment

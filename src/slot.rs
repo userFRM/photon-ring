@@ -75,16 +75,33 @@ impl<T: Pod> Slot<T> {
         self.stamp.store(done, Ordering::Release);
     }
 
-    /// Seqlock write via closure — enables in-place construction.
+    /// Seqlock write via closure — construct a value on the stack, then
+    /// `write_volatile` it into the slot.
+    ///
+    /// The closure receives a `&mut MaybeUninit<T>` pointing to a **stack
+    /// temporary**, not the slot itself. This avoids creating a `&mut`
+    /// reference that aliases concurrent readers (which would be UB under
+    /// the Rust abstract machine). After the closure returns, the fully
+    /// initialized value is written into the slot with `write_volatile`,
+    /// matching the soundness approach used by [`write()`](Self::write).
+    ///
+    /// For `T: Pod` types (typically register-sized), the extra stack copy
+    /// is negligible and often optimized away.
     #[inline]
     pub(crate) fn write_with(&self, seq: u64, f: impl FnOnce(&mut MaybeUninit<T>)) {
+        let mut tmp = MaybeUninit::<T>::uninit();
+        f(&mut tmp);
+
         let writing = seq * 2 + 1;
         let done = seq * 2 + 2;
 
         self.stamp.store(writing, Ordering::Relaxed);
         fence(Ordering::Release);
 
-        f(unsafe { &mut *self.value.get() });
+        // SAFETY: single-writer guarantee — no concurrent writes to this slot.
+        // write_volatile avoids formal UB from concurrent readers (same as write()).
+        // tmp was initialized by the closure (caller contract).
+        unsafe { ptr::write_volatile(self.value.get() as *mut T, tmp.assume_init()) };
 
         self.stamp.store(done, Ordering::Release);
     }

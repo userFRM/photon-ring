@@ -90,7 +90,7 @@ Photon Ring moves synchronization into each slot. Every slot carries its own seq
 ```text
 1. stamp = seq * 2 + 1     (odd = write in progress)
 2. fence(Release)          (stamp visible before data)
-3. memcpy(slot.value, data)
+3. write_volatile(slot.value, data)
 4. stamp = seq * 2 + 2     (even = write complete, Release)
 5. cursor = seq            (Release - consumers can proceed)
 ```
@@ -102,7 +102,7 @@ Photon Ring moves synchronization into each slot. Every slot carries its own seq
 2. if odd -> spin
 3. if s1 < expected -> Empty
 4. if s1 > expected -> Lagged
-5. value = memcpy(slot)    (direct read, T: Pod)
+5. value = read_volatile(slot)    (direct read, T: Pod)
 6. s2 = stamp.load(Acquire)
 7. if s1 == s2 -> return
 8. else -> retry

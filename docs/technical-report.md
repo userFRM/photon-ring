@@ -47,7 +47,7 @@ The design makes three further contributions beyond co-location:
 
 **Per-consumer cursors with no shared state on the read path.** Each subscriber holds a private, non-atomic `u64` cursor tracking the next expected sequence number. Unlike the Disruptor, where consumers must load a shared barrier to detect new messages, Photon Ring consumers go directly to the expected slot and check its stamp. The shared producer cursor is consulted only on the lag-detection slow path -- when the stamp indicates that the slot has been overwritten -- not on the common-case fast path. This eliminates all consumer-to-consumer and consumer-to-producer contention on the hot path.
 
-**The `T: Copy` constraint as a safety invariant.** Photon Ring requires that message types implement `Copy`, which precludes heap-allocated types (`String`, `Vec`, `Box`) but enables a critical safety property: torn reads -- where the consumer reads a partially overwritten slot -- produce a bit pattern with no destructor, no pointer dereference, and no validity-invariant violation (for recommended payload types). The seqlock stamp check detects the inconsistency, and the torn value is silently discarded. This is the same principle underlying the Linux kernel's `seqlock_t`, where the restriction to plain-old-data types ensures that speculative reads cannot corrupt kernel state.
+**The `T: Pod` constraint as a safety invariant.** Photon Ring requires that message types implement `Pod` (plain-old-data: every bit pattern is valid), which precludes heap-allocated types (`String`, `Vec`, `Box`) but enables a critical safety property: torn reads -- where the consumer reads a partially overwritten slot -- produce a bit pattern with no destructor, no pointer dereference, and no validity-invariant violation (for recommended payload types). The seqlock stamp check detects the inconsistency, and the torn value is silently discarded. This is the same principle underlying the Linux kernel's `seqlock_t`, where the restriction to plain-old-data types ensures that speculative reads cannot corrupt kernel state.
 
 **Full `no_std` compatibility.** The entire library, including the named-topic bus (`Photon<T>`), heterogeneous-type bus (`TypedBus`), batched subscriber groups (`SubscriberGroup<T, N>`), and all wait strategies, operates without the Rust standard library. The implementation depends only on `alloc` (for `Arc`, `Box`, and `Vec` at channel construction time) and two lightweight dependencies: `hashbrown` for the topic bus hash map and `spin` for internal mutexes. Wait strategies use `core::hint::spin_loop()` and inline assembly (`WFE` on aarch64), never OS primitives such as `futex` or thread parking.
 
@@ -85,7 +85,7 @@ The crucial property of this protocol is that the reader never writes to shared 
 
 The restriction to plain-old-data types (POD, or trivially copyable types in C++ terminology) is fundamental to the correctness of the pattern. Because the reader copies data that may be concurrently modified by the writer, the read can produce a *torn* value -- a bit pattern that is neither the old value nor the new value, but an arbitrary interleaving of bytes from both. For POD types, this torn value is harmless: it is detected by the sequence counter check and discarded. No destructor runs, no pointer is dereferenced, and no resource is leaked. For non-POD types containing pointers or RAII handles, a torn read could produce an invalid pointer that, when subsequently dereferenced or freed, causes memory corruption. The Linux kernel's seqlock documentation [10] explicitly warns against protecting pointer-containing structures with seqlocks.
 
-This POD restriction maps directly to Rust's `Copy` trait. Types implementing `Copy` are guaranteed to be bitwise-copyable, to have no `Drop` implementation, and to contain no references that could be invalidated by a torn read. Photon Ring's `T: Copy` constraint is the Rust-idiomatic expression of the same safety invariant that the Linux kernel enforces through convention and code review.
+This POD restriction maps directly to Rust's `Copy` trait. Types implementing `Copy` are guaranteed to be bitwise-copyable, to have no `Drop` implementation, and to contain no references that could be invalidated by a torn read. Photon Ring's `T: Pod` constraint is the Rust-idiomatic expression of the same safety invariant that the Linux kernel enforces through convention and code review.
 
 Under the C++20 and Rust memory models, the seqlock pattern occupies an uneasy position. The concurrent non-atomic read (by the reader) and non-atomic write (by the writer) to the same memory location constitute a *data race* as defined by the memory model, which is undefined behavior regardless of whether the result is subsequently discarded. The Linux kernel addresses this by operating outside the C abstract machine (relying on compiler barriers and hardware memory ordering guarantees rather than the language-level model). Proposals such as P1478R7 [11] to the C++ standards committee aim to provide language-level support for seqlock-safe reads, but as of this writing no such facility exists in either C++ or Rust. This tension between the formal model and the practical hardware behavior is a known limitation shared by all seqlock implementations, including Photon Ring.
 
@@ -192,10 +192,10 @@ On x86-TSO, this fence compiles to zero instructions because the Total Store Ord
 **Step 3: Write the payload.**
 
 ```rust
-unsafe { ptr::write(self.value.get() as *mut T, value) };
+unsafe { ptr::write_volatile(self.value.get() as *mut T, value) };
 ```
 
-The payload is copied into the slot via `ptr::write`, which performs a bitwise copy of the `T: Copy` value. This is an unsynchronised write -- it does not use atomic operations -- which is why the seqlock protocol is necessary to prevent consumers from observing a partially written value.
+The payload is copied into the slot via `write_volatile`, which performs a bitwise copy of the `T: Pod` value. This is an unsynchronised write -- it does not use atomic operations -- which is why the seqlock protocol is necessary to prevent consumers from observing a partially written value.
 
 **Step 4: Store the even (done) stamp.**
 
@@ -253,10 +253,10 @@ If the stamp is even but does not match the expected value, the slot holds a dif
 **Step 4: Read the value.**
 
 ```rust
-let value = unsafe { ptr::read((*self.value.get()).as_ptr()) };
+let value = unsafe { ptr::read_volatile((*self.value.get()).as_ptr()) };
 ```
 
-The consumer performs an unsynchronised `ptr::read` of the payload. If the publisher is concurrently writing to this slot (because the consumer's stamp check in step 1 raced with the publisher's stamp update in step 1 of the write protocol), this read may produce a torn -- partially old, partially new -- bit pattern. The verification phase (step 5) detects this case.
+The consumer performs an unsynchronised `read_volatile` of the payload. If the publisher is concurrently writing to this slot (because the consumer's stamp check in step 1 raced with the publisher's stamp update in step 1 of the write protocol), this read may produce a torn -- partially old, partially new -- bit pattern. The verification phase (step 5) detects this case.
 
 **Phase 3: Stamp verification**
 
@@ -291,7 +291,7 @@ The full protocol ensures that a consumer never observes a partially written mes
 Each `Subscriber` holds a private cursor field:
 
 ```rust
-pub struct Subscriber<T: Copy> {
+pub struct Subscriber<T: Pod> {
     ring: Arc<SharedRing<T>>,
     cursor: u64,       // plain u64 -- not atomic
     tracker: Option<Arc<Padded<AtomicU64>>>,
@@ -352,7 +352,7 @@ This reduces per-message cache traffic from two cache-line loads to one. On Inte
 `SubscriberGroup<T, const N: usize>` is a const-generic type that holds `N` logical subscriber cursors and performs a single seqlock read when all cursors are aligned -- the common case when all subscribers are polled in lockstep on the same thread.
 
 ```rust
-pub struct SubscriberGroup<T: Copy, const N: usize> {
+pub struct SubscriberGroup<T: Pod, const N: usize> {
     ring: Arc<SharedRing<T>>,
     cursors: [u64; N],
     ...
@@ -384,7 +384,7 @@ pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
 
 The cost breakdown is:
 
-- **One seqlock read**: two `Acquire` loads (stamp before and after) plus one `ptr::read` of the payload. This is the expensive part -- it involves a cache-line transfer from the publisher's core.
+- **One seqlock read**: two `Acquire` loads (stamp before and after) plus one `read_volatile` of the payload. This is the expensive part -- it involves a cache-line transfer from the publisher's core.
 - **N cursor increments**: a compiler-unrolled loop over the `[u64; N]` array. For small `N` (constrained at compile time), LLVM unrolls this into `N` straight-line compare-and-increment operations that execute entirely in registers.
 
 The result is that fanout cost scales as O(1) seqlock reads + O(N) register operations, rather than O(N) seqlock reads. Benchmarks show 0.2 ns per subscriber for a `SubscriberGroup`, versus 1.1 ns per subscriber for independent `Subscriber` instances -- a 5.5x improvement. For a fanout of 10 subscribers, this translates to 4.3 ns total (group) versus 14 ns total (independent).
@@ -481,25 +481,40 @@ self.ring.slot(seq).write(seq, value);
 
 The producer writes the claimed slot using the standard seqlock write protocol (Section 3.2). Multiple producers may be writing to *different* slots concurrently -- the seqlock per-slot design allows this without contention (each slot is on its own cache line).
 
-**Step 3: Advance the cursor in strict order.**
+**Step 3: Advance the cursor via stamp-based predecessor waiting.**
+
+The cursor must advance in strict sequence order: producer claiming sequence *k* must wait until all sequences 0 through *k - 1* have committed before advancing the cursor to *k*. Rather than spinning on the cursor CAS (which serializes all producers on a single cache line), the implementation waits on the predecessor's *slot stamp* -- distributing contention across per-slot cache lines.
+
+The fast path attempts a single CAS:
 
 ```rust
 let expected_cursor = if seq == 0 { u64::MAX } else { seq - 1 };
-while self.ring.cursor.0
-    .compare_exchange_weak(expected_cursor, seq, Ordering::Release, Ordering::Relaxed)
-    .is_err()
+if cursor_atomic
+    .compare_exchange(expected_cursor, seq, Ordering::Release, Ordering::Relaxed)
+    .is_ok()
 {
-    spin_loop();
+    self.catch_up_cursor(seq);
+    return;
 }
 ```
 
-The cursor must advance in strict sequence order: producer claiming sequence *k* must wait until the cursor equals *k - 1* (meaning all sequences 0 through *k - 1* have committed) before advancing it to *k*. This is enforced by a CAS spin loop: `compare_exchange_weak` atomically sets the cursor to `seq` only if it currently equals `expected_cursor`. If another producer with a lower sequence number has not yet committed, the CAS fails and the current producer spins.
+If the CAS fails (predecessor not yet committed), the producer polls the predecessor's slot stamp instead of retrying the cursor CAS:
+
+```rust
+let pred_slot = &slots[(seq - 1) & mask];
+let pred_done = (seq - 1) * 2 + 2;
+while pred_slot.stamp_load() < pred_done {
+    spin_loop();  // or WFE on aarch64
+}
+```
+
+Once the predecessor's stamp confirms completion, a single CAS advances the cursor. A subsequent catch-up loop checks whether later producers (seq+1, seq+2, ...) have also committed their slots, advancing the cursor past them in one pass.
 
 The `Release` ordering on the successful CAS ensures that the slot write (step 2) is visible to consumers before the cursor update. The `Relaxed` ordering on the failure path avoids unnecessary fence overhead during the spin.
 
 The special case `seq == 0` handles the initial state where the cursor is `u64::MAX` (the sentinel for "nothing published yet").
 
-This protocol guarantees that consumers see messages in strict sequence order, even when multiple producers write concurrently. The trade-off is that the cursor cache line becomes a serialisation point: under high producer contention, the CAS spin loop becomes the bottleneck, as all producers contend on the same cache line. This is the standard cost of ordered multi-producer ring buffers and is discussed further in Section 7.3.
+This stamp-based waiting protocol distributes contention across per-slot cache lines rather than concentrating it on the single cursor cache line. In the uncontended case, the fast-path CAS succeeds immediately with no additional overhead. Under contention, producers wait on their predecessor's slot stamp (which resides on a different cache line from the cursor and from other predecessors' stamps), significantly reducing serialization compared to a pure cursor-CAS spin loop.
 
 ## 4. Implementation
 
@@ -514,7 +529,7 @@ The write protocol uses `Relaxed` for the odd stamp store, paired with an explic
 ```rust
 self.stamp.store(writing, Ordering::Relaxed);   // step 1
 fence(Ordering::Release);                        // step 2
-ptr::write(self.value.get() as *mut T, value);   // step 3
+ptr::write_volatile(self.value.get() as *mut T, value);   // step 3
 self.stamp.store(done, Ordering::Release);       // step 4
 ```
 
@@ -532,7 +547,7 @@ let s1 = self.stamp.load(Ordering::Acquire);   // step 1
 let s2 = self.stamp.load(Ordering::Acquire);   // step 5
 ```
 
-The first `Acquire` load (step 1) ensures that the payload read is ordered after the stamp load. Without this, the compiler or hardware could speculatively execute the `ptr::read` before the stamp check, potentially reading stale data.
+The first `Acquire` load (step 1) ensures that the payload read is ordered after the stamp load. Without this, the compiler or hardware could speculatively execute the `read_volatile` before the stamp check, potentially reading stale data.
 
 The second `Acquire` load (step 5) ensures that the payload read is ordered before the verification stamp load. Without this, the processor could reorder the second stamp load before the data read, defeating the torn-read detection.
 
@@ -548,15 +563,15 @@ The only case where x86 requires an explicit fence is a `SeqCst` store (which us
 
 **The data-race question:**
 
-Strictly speaking, the concurrent `ptr::read` (consumer) and `ptr::write` (publisher) on the same slot constitute a data race under both the C++20 and Rust memory models, because the accesses are not mediated by atomic operations. The seqlock protocol detects torn reads *after the fact* via the stamp re-check, but the read itself is technically undefined behaviour.
+Strictly speaking, the concurrent `read_volatile` (consumer) and `write_volatile` (publisher) on the same slot constitute a data race under both the C++20 and Rust memory models, because the accesses are not mediated by atomic operations. The seqlock protocol detects torn reads *after the fact* via the stamp re-check, but the read itself is technically undefined behaviour.
 
-This is the same situation faced by the Linux kernel's `seqlock_t` implementation, and it is widely regarded as "benign UB" in practice: no known compiler optimisation or hardware behaviour on x86, ARM, or RISC-V produces incorrect results for `Copy` types under this pattern. The torn bits are detected and discarded, and no destructor runs on the torn value (because `T: Copy` implies no `Drop`). MIRI, Rust's undefined-behaviour sanitiser, flags the concurrent access but does not identify any actual miscompilation when run with `-Zmiri-disable-data-race-check`. A future solution may come from atomic memcpy (proposed for C++26), which would eliminate the UB without changing the protocol's semantics or performance.
+This is the same situation faced by the Linux kernel's `seqlock_t` implementation, and it is widely regarded as "benign UB" in practice: no known compiler optimisation or hardware behaviour on x86, ARM, or RISC-V produces incorrect results for `Pod` types under this pattern. The torn bits are detected and discarded, and no destructor runs on the torn value (because `T: Pod` implies `Copy` and thus no `Drop`). MIRI, Rust's undefined-behaviour sanitiser, flags the concurrent access but does not identify any actual miscompilation when run with `-Zmiri-disable-data-race-check`. A future solution may come from atomic memcpy (proposed for C++26), which would eliminate the UB without changing the protocol's semantics or performance.
 
-### 4.2 The `T: Copy` constraint
+### 4.2 The `T: Pod` constraint
 
-The `T: Copy` bound on all Photon Ring message types is a hard safety requirement, not merely a performance optimisation. It serves three purposes:
+The `T: Pod` bound on all Photon Ring message types is a hard safety requirement, not merely a performance optimisation. It serves three purposes:
 
-**Torn-read safety.** When a consumer's `ptr::read` races with a publisher's `ptr::write`, the resulting bit pattern may be a chimera: some bytes from the old value, some from the new. For `Copy` types, this chimera is harmless. It is a valid bit pattern (all bit patterns are valid for `Copy` types that do not contain padding with validity constraints), and discarding it after the stamp re-check has no side effects. No destructor runs, no allocation is freed, no invariant is violated.
+**Torn-read safety.** When a consumer's `read_volatile` races with a publisher's `write_volatile`, the resulting bit pattern may be a chimera: some bytes from the old value, some from the new. For `Pod` types, this chimera is harmless. It is a valid bit pattern (all bit patterns are valid for `Copy` types that do not contain padding with validity constraints), and discarding it after the stamp re-check has no side effects. No destructor runs, no allocation is freed, no invariant is violated.
 
 For non-`Copy` types, a torn read is catastrophic. Consider `String`: a torn read might produce a `String` whose internal pointer points to one allocation and whose length/capacity correspond to a different allocation. When this torn `String` is dropped, it would attempt to free an invalid pointer, causing a double-free or heap corruption. The `Copy` bound eliminates this entire class of bugs at compile time.
 
@@ -765,7 +780,7 @@ A key design goal of Photon Ring is efficient single-producer, multi-consumer fa
 | SubscriberGroup | ~0.2 ns / sub | Linear regression on 1--10 subs |
 | Improvement factor | 5.5x | 1.1 / 0.2 |
 
-**Root cause analysis.** Because these benchmarks execute on a single thread, all data resides in L1d throughout. There is no cache-coherence traffic; the scaling cost is pure instruction overhead. For independent subscribers, each `try_recv()` call executes the full seqlock read protocol: two `stamp.load(Acquire)` operations (pre-read and post-read validation), one `ptr::read` of the payload, one cursor increment, and associated branch instructions. The 1.1 ns marginal cost per subscriber reflects these ~4--5 instructions per seqlock read.
+**Root cause analysis.** Because these benchmarks execute on a single thread, all data resides in L1d throughout. There is no cache-coherence traffic; the scaling cost is pure instruction overhead. For independent subscribers, each `try_recv()` call executes the full seqlock read protocol: two `stamp.load(Acquire)` operations (pre-read and post-read validation), one `read_volatile` of the payload, one cursor increment, and associated branch instructions. The 1.1 ns marginal cost per subscriber reflects these ~4--5 instructions per seqlock read.
 
 `SubscriberGroup<T, N>` eliminates N-1 redundant seqlock reads by exploiting the observation that when all N cursors are aligned (the common case for same-thread fanout), they all seek the same slot at the same sequence number. The group performs a single seqlock read (one stamp-load pair plus one payload copy), then advances all N cursors in a compiler-unrolled loop. Each cursor advance is a single `u64` increment (one `add` instruction), costing approximately 0.2 ns. The stamp loads and payload copy are performed exactly once regardless of N, making the seqlock overhead amortised to O(1) rather than O(N).
 
@@ -797,7 +812,7 @@ Photon Ring builds on a substantial body of prior work in lock-free inter-thread
 
 The LMAX Disruptor [Thompson et al., 2011] is the seminal work on high-performance inter-thread messaging via pre-allocated ring buffers. The Disruptor introduced sequence barriers as the primary coordination mechanism: a shared cursor (the producer's sequence number) is polled by consumers, who advance their own dependent barriers in a directed acyclic graph of event processors. Events are pre-allocated in the ring and mutated in place, avoiding garbage collection pressure. Thompson reported approximately 52 ns mean latency in a three-stage pipeline on contemporary hardware.
 
-Photon Ring borrows the Disruptor's core insight -- pre-allocated ring buffers with bitmask indexing -- but departs from it in three fundamental ways. First, the Disruptor uses separate sequence barriers to coordinate producers and consumers; Photon Ring co-locates a seqlock stamp with the payload in the same cache line, eliminating one cache-line transfer per message on the consumer hot path. Second, the Disruptor's events are mutable Java objects that are populated in place and passed through event handlers; Photon Ring requires `T: Copy` and uses value-copy semantics, which enables torn-read detection without resource-management hazards. Third, the Disruptor maintains shared consumer barriers that all downstream processors poll; Photon Ring uses per-consumer local cursors (plain `u64` values, not atomics), which eliminates all consumer-to-consumer contention.
+Photon Ring borrows the Disruptor's core insight -- pre-allocated ring buffers with bitmask indexing -- but departs from it in three fundamental ways. First, the Disruptor uses separate sequence barriers to coordinate producers and consumers; Photon Ring co-locates a seqlock stamp with the payload in the same cache line, eliminating one cache-line transfer per message on the consumer hot path. Second, the Disruptor's events are mutable Java objects that are populated in place and passed through event handlers; Photon Ring requires `T: Pod` and uses value-copy semantics, which enables torn-read detection without resource-management hazards. Third, the Disruptor maintains shared consumer barriers that all downstream processors poll; Photon Ring uses per-consumer local cursors (plain `u64` values, not atomics), which eliminates all consumer-to-consumer contention.
 
 The Disruptor's design is better suited to complex processing topologies (diamonds, pipelines with dependent stages) because its sequence-barrier abstraction naturally expresses inter-stage dependencies. Photon Ring's simpler model -- independent consumers without dependency graphs -- trades topological generality for lower per-message latency. The managed consumer thread model of the Disruptor also handles thread lifecycle concerns that Photon Ring deliberately leaves to the caller.
 
@@ -849,29 +864,29 @@ Crossbeam is the more mature and general-purpose library: it provides unbounded 
 
 ### 7.1 Seqlock memory model undefined behavior
 
-The most fundamental limitation of Photon Ring is that the seqlock protocol involves a data race under the C++20 and Rust abstract memory models. The consumer reads the payload via `ptr::read` while the producer may be concurrently writing to the same memory location via `ptr::write`. Although the seqlock stamp detects this situation after the fact -- the consumer re-checks the stamp and discards any torn read -- the concurrent non-atomic read itself constitutes undefined behavior according to the language specification, regardless of whether the result is used.
+The most fundamental limitation of Photon Ring is that the seqlock protocol involves a data race under the C++20 and Rust abstract memory models. The consumer reads the payload via `read_volatile` while the producer may be concurrently writing to the same memory location via `write_volatile`. Although the seqlock stamp detects this situation after the fact -- the consumer re-checks the stamp and discards any torn read -- the concurrent non-atomic read itself constitutes undefined behavior according to the language specification, regardless of whether the result is used.
 
 This is not a novel problem. The Linux kernel's `seqlock_t` mechanism [Bovet and Cesati, 2005] uses the same pattern pervasively for read-heavy data such as `jiffies`, namespace counters, and filesystem metadata. Facebook's Folly library implements `folly::SharedMutex` using identical semantics. The C++ standards committee (WG21) has acknowledged this formalization gap; proposals such as P1478R7 [Bos and Carter, 2023] aim to introduce `std::byte`-based seqlock support, and discussions around `std::start_lifetime_as` seek to define the semantics of optimistic concurrent reads.
 
 In practice, no extant compiler or hardware architecture produces incorrect behavior for this pattern when applied to `Copy` types on naturally aligned memory. The undefined behavior is "benign" in the same sense as the Linux kernel's seqlock: the abstract machine permits arbitrary behavior, but all concrete implementations produce the expected outcome -- a potentially invalid bit pattern that is always detected and discarded by the stamp verification. MIRI (under `-Zmiri-disable-data-race-check`) does not flag the single-threaded seqlock operations, though it cannot verify the concurrent protocol because its thread scheduler does not model hardware memory ordering.
 
-A future resolution may come from either the language side (atomic `memcpy` proposed for C++26, or a Rust equivalent) or the library side (per-byte atomics, which are correct but impractical for payloads larger than a few bytes). Until such facilities are standardized, Photon Ring accepts this gap -- as does every production seqlock implementation -- and mitigates it through the `T: Copy` bound and the recommendation that users restrict payloads to types with no validity invariants (plain numeric types, `#[repr(C)]` structs of numerics).
+A future resolution may come from either the language side (atomic `memcpy` proposed for C++26, or a Rust equivalent) or the library side (per-byte atomics, which are correct but impractical for payloads larger than a few bytes). Until such facilities are standardized, Photon Ring accepts this gap -- as does every production seqlock implementation -- and mitigates it through the `T: Pod` bound and the recommendation that users restrict payloads to types with no validity invariants (plain numeric types, `#[repr(C)]` structs of numerics).
 
-### 7.2 T: Copy restriction
+### 7.2 T: Pod restriction
 
-The `T: Copy` bound on all Photon Ring types (`Publisher<T>`, `Subscriber<T>`, `Slot<T>`) excludes heap-allocated types such as `String`, `Vec`, `Box`, and reference-counted pointers (`Arc`, `Rc`). This restriction is not merely conservative -- it is load-bearing for safety. A torn read of a non-`Copy` type could produce an invalid pointer value; if a destructor subsequently runs on this value, the result is a double-free, use-after-free, or arbitrary memory corruption. The `Copy` bound guarantees that no destructor executes on torn values, confining the impact of a torn read to a harmless invalid bit pattern.
+The `T: Pod` bound on all Photon Ring types (`Publisher<T>`, `Subscriber<T>`, `Slot<T>`) excludes heap-allocated types such as `String`, `Vec`, `Box`, and reference-counted pointers (`Arc`, `Rc`). This restriction is not merely conservative -- it is load-bearing for safety. A torn read of a non-`Pod` type could produce an invalid pointer value; if a destructor subsequently runs on this value, the result is a double-free, use-after-free, or arbitrary memory corruption. The `Pod` bound guarantees that no destructor executes on torn values, confining the impact of a torn read to a harmless invalid bit pattern.
 
 Even within the `Copy` universe, certain types have validity invariants that a torn read could violate: `bool` must be 0 or 1, `NonZero<u32>` must be nonzero, and reference types (`&T`) must point to valid memory. Photon Ring's documentation recommends restricting payloads to types without validity invariants -- plain numerics (`u8` through `u128`, `f32`, `f64`), fixed-size arrays thereof, and `#[repr(C)]` structs composed exclusively of such types.
 
-A possible relaxation would introduce a marker trait -- tentatively `SafeForSeqlock` -- that users would implement for their payload types, attesting that the type has no validity invariants and is safe to read via `ptr::read` under a torn-read scenario. This would allow types like `#[repr(C)] struct Quote { price: f64, volume: u32, _pad: [u8; 4] }` to be used without requiring `Copy`, though in practice nearly all such types already implement `Copy`. A more ambitious direction would use `ManuallyDrop<T>` with epoch-based reclamation to support non-`Copy` types, at the cost of additional complexity on the read path and a fundamental change to the ownership model.
+A possible relaxation would introduce a marker trait -- tentatively `SafeForSeqlock` -- that users would implement for their payload types, attesting that the type has no validity invariants and is safe to read via `read_volatile` under a torn-read scenario. This would allow types like `#[repr(C)] struct Quote { price: f64, volume: u32, _pad: [u8; 4] }` to be used without requiring `Copy`, though in practice nearly all such types already implement `Copy`. A more ambitious direction would use `ManuallyDrop<T>` with epoch-based reclamation to support non-`Copy` types, at the cost of additional complexity on the read path and a fundamental change to the ownership model.
 
 ### 7.3 Multi-producer CAS overhead
 
-The `MpPublisher` introduced in v0.7.0 uses a `fetch_add` on a shared atomic counter to claim sequence numbers and a `compare_exchange_weak` spin loop to advance the cursor in strict order. This is the standard Disruptor multi-producer protocol, adapted for the seqlock stamp encoding.
+The `MpPublisher` uses a `fetch_add` on a shared atomic counter to claim sequence numbers and a stamp-based predecessor waiting protocol to advance the cursor in strict order. Rather than spinning on the cursor CAS (which serializes all producers on a single cache line), each producer waits for its predecessor's slot stamp to indicate completion before attempting a single CAS to advance the cursor. This distributes contention across per-slot cache lines.
 
-The CAS spin loop serializes all producers on the cursor cache line: each producer must wait until all prior sequences have committed before it can advance the cursor past its own sequence. Under contention with four producers on an i7-10700KF, the MPMC path exhibits approximately 4.2x higher latency than the SPMC single-producer path. This overhead is inherent to any CAS-based sequence-claiming protocol and is not specific to Photon Ring's implementation.
+Despite this optimization, the MPMC path still exhibits higher latency than the SPMC single-producer path under contention, because sequence ordering requires producers to wait for predecessors. Under contention with four producers on an i7-10700KF, the MPMC path exhibits approximately 4.2x higher latency than the SPMC single-producer path. This overhead is inherent to any ordered multi-producer protocol and is not specific to Photon Ring's implementation.
 
-Possible mitigations include batched CAS (a producer claims N sequence numbers at once, amortizing the CAS cost over N messages), per-producer sub-rings with a merging consumer (eliminates cross-producer contention at the cost of consumer complexity), and FAA-based cursor advancement that relaxes strict ordering (allowing consumers to observe messages slightly out of order). Each of these trades correctness guarantees or API simplicity for throughput under contention; none has been implemented as of v0.8.0.
+Possible mitigations include batched claiming (a producer claims N sequence numbers at once, amortizing the atomic RMW cost over N messages), per-producer sub-rings with a merging consumer (eliminates cross-producer contention at the cost of consumer complexity), and FAA-based cursor advancement that relaxes strict ordering (allowing consumers to observe messages slightly out of order). Each of these trades correctness guarantees or API simplicity for throughput under contention.
 
 ### 7.4 Platform-specific optimizations
 
@@ -887,7 +902,7 @@ Photon Ring includes a TLA+ specification (`verification/seqlock.tla`) that mode
 
 However, the TLA+ specification operates under sequential consistency -- it does not model the weak memory ordering semantics of real hardware (x86-TSO, ARM's relaxed model, RISC-V RVWMO). Extending the formal verification to weaker memory models would require tools such as the Linux Kernel Memory Model (LKMM), CDSChecker [Norris and Demsky, 2013], or GenMC [Kokologiannakis et al., 2019], which can explore the reorderings permitted by specific hardware memory models. The multi-producer CAS protocol added in v0.7.0 is not yet modeled in the TLA+ specification and represents an important verification gap.
 
-On the dynamic testing side, Loom [Tokio, 2019] -- the Rust concurrency testing framework that exhaustively explores thread interleavings -- cannot be applied to the seqlock pattern because Loom intercepts `std::sync::atomic` operations but does not model non-atomic `ptr::read`/`ptr::write` accesses. The seqlock's optimistic read path, which deliberately performs a non-atomic read concurrent with a potential write, falls outside Loom's interception model. Property-based testing via `proptest` [Altarawneh, 2018] is a viable complement: randomized message sequences, ring sizes, and consumer counts can exercise edge cases (lag recovery, ring wrap-around, torn-read retry) that are difficult to reach with hand-written tests. A `proptest` harness is planned for a future release.
+On the dynamic testing side, Loom [Tokio, 2019] -- the Rust concurrency testing framework that exhaustively explores thread interleavings -- cannot be applied to the seqlock pattern because Loom intercepts `std::sync::atomic` operations but does not model non-atomic `read_volatile`/`write_volatile` accesses. The seqlock's optimistic read path, which deliberately performs a volatile read concurrent with a potential write, falls outside Loom's interception model. Property-based testing via `proptest` [Altarawneh, 2018] is a viable complement: randomized message sequences, ring sizes, and consumer counts can exercise edge cases (lag recovery, ring wrap-around, torn-read retry) that are difficult to reach with hand-written tests. A `proptest` harness is planned for a future release.
 
 ## 8. Conclusion
 
@@ -897,7 +912,7 @@ The core contribution is the stamp-in-slot co-location: by placing the seqlock s
 
 The `SubscriberGroup<T, N>` mechanism extends this efficiency to multi-consumer workloads: when N consumers are polled on the same thread, the seqlock is read once and all N cursors are advanced in a compiler-unrolled loop, reducing per-subscriber fanout cost from 1.1 ns (independent subscribers) to 0.2 ns (grouped), a 5.5x improvement.
 
-These gains come with explicit tradeoffs. The `T: Copy` bound restricts payloads to plain-old-data types, excluding heap-allocated types such as `String` and `Vec`. The default mode is lossy: when the ring wraps, slow consumers miss messages rather than blocking the producer. The seqlock read protocol involves a concurrent non-atomic memory access that is technically undefined behavior under the C++20 and Rust abstract memory models, though it is universally relied upon in practice -- from the Linux kernel to Facebook's Folly library -- and functions correctly on all mainstream hardware for `Copy` types without validity invariants.
+These gains come with explicit tradeoffs. The `T: Pod` bound restricts payloads to plain-old-data types, excluding heap-allocated types such as `String` and `Vec`. The default mode is lossy: when the ring wraps, slow consumers miss messages rather than blocking the producer. The seqlock read protocol involves a concurrent non-atomic memory access that is technically undefined behavior under the C++20 and Rust abstract memory models, though it is universally relied upon in practice -- from the Linux kernel to Facebook's Folly library -- and functions correctly on all mainstream hardware for `Copy` types without validity invariants.
 
 The crate is `no_std` compatible (requiring only `alloc`), with two runtime dependencies (`hashbrown` for the topic bus hash map and `spin` for internal locks). Platform-specific optimizations -- `WFE` on aarch64, `PAUSE` on x86 -- reduce idle power consumption without sacrificing wakeup latency. The TLA+ specification in `verification/seqlock.tla` formally verifies the safety property (no torn reads are ever committed), result validity, and liveness (progress under fair scheduling) for bounded configurations under sequential consistency.
 

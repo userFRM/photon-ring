@@ -36,6 +36,39 @@ pub struct Publisher<T: Pod> {
 unsafe impl<T: Pod> Send for Publisher<T> {}
 
 impl<T: Pod> Publisher<T> {
+    /// Spin-wait until backpressure allows publishing.
+    ///
+    /// On a bounded channel, this blocks until the slowest subscriber has
+    /// advanced far enough. On a lossy channel (no backpressure), this is
+    /// a no-op.
+    #[inline]
+    fn wait_for_backpressure(&mut self) {
+        if !self.has_backpressure {
+            return;
+        }
+        loop {
+            if let Some(bp) = self.ring.backpressure.as_ref() {
+                let capacity = self.ring.capacity();
+                let effective = capacity - bp.watermark;
+                if self.seq >= self.cached_slowest + effective {
+                    match self.ring.slowest_cursor() {
+                        Some(slowest) => {
+                            self.cached_slowest = slowest;
+                            if self.seq >= slowest + effective {
+                                core::hint::spin_loop();
+                                continue;
+                            }
+                        }
+                        None => {
+                            // No subscribers registered yet — ring is unbounded.
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+
     /// Write a single value to the ring without any backpressure check.
     /// This is the raw publish path used by both `publish()` (lossy) and
     /// `try_publish()` (after backpressure check passes).
@@ -53,12 +86,13 @@ impl<T: Pod> Publisher<T> {
 
     /// Publish by writing directly into the slot via a closure.
     ///
-    /// The closure receives a `&mut MaybeUninit<T>`, allowing in-place
-    /// construction that can eliminate the write-side `memcpy` when the
-    /// compiler constructs the value directly in slot memory.
+    /// The closure receives a `&mut MaybeUninit<T>`, allowing construction
+    /// of the value into a stack temporary which is then written to the slot.
     ///
-    /// This is the lossy (no backpressure) path. For bounded channels,
-    /// prefer [`publish()`](Self::publish) with a pre-built value.
+    /// On a bounded channel (created with [`channel_bounded()`]), this method
+    /// spin-waits until there is room in the ring, ensuring no message loss
+    /// (same backpressure semantics as [`publish()`](Self::publish)).
+    /// On a regular (lossy) channel, this publishes immediately.
     ///
     /// # Example
     ///
@@ -71,6 +105,7 @@ impl<T: Pod> Publisher<T> {
     /// ```
     #[inline]
     pub fn publish_with(&mut self, f: impl FnOnce(&mut core::mem::MaybeUninit<T>)) {
+        self.wait_for_backpressure();
         // SAFETY: see publish_unchecked.
         let slot = unsafe { &*self.slots_ptr.add((self.seq & self.mask) as usize) };
         prefetch_write_next(self.slots_ptr, (self.seq + 1) & self.mask);

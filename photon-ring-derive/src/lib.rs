@@ -13,9 +13,11 @@
 //! }
 //! ```
 //!
-//! This generates `#[repr(C)]`, `#[derive(Clone, Copy)]`, and
-//! `unsafe impl photon_ring::Pod for Quote {}` — with a compile-time
-//! check that every field type implements `Pod`.
+//! This generates compile-time assertions that every field implements `Pod`,
+//! plus `unsafe impl photon_ring::Pod for Quote {}`.
+//!
+//! **Note:** The macro does *not* add `#[repr(C)]` or `Clone`/`Copy` derives.
+//! You must add those yourself for the `Pod` contract to hold.
 //!
 //! ## `Message` derive
 //!
@@ -43,8 +45,8 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields, GenericArgument, PathArg
 /// Requirements:
 /// - Must be a struct (not enum or union).
 /// - All fields must implement `Pod`.
-/// - The struct will be given `#[repr(C)]` semantics (the macro adds
-///   `Clone` and `Copy` derives and the `unsafe impl Pod`).
+/// - The user must add `#[repr(C)]`, `Clone`, and `Copy` themselves;
+///   the macro only emits field assertions and `unsafe impl Pod`.
 ///
 /// # Example
 ///
@@ -114,9 +116,14 @@ enum FieldKind {
     Usize,
     /// `isize` → `i64`.
     Isize,
-    /// `Option<T>` where T is a numeric type → `u64`.
+    /// `Option<T>` where T is an integer type.
+    /// Wire struct gets two fields: `X_value: u64` and `X_has: u8`.
     /// Stores the inner type for the back-conversion cast.
-    OptionNumeric(Type),
+    OptionInt(Type),
+    /// `Option<f32>` — wire struct gets `X_value: u64` (bit-encoded) and `X_has: u8`.
+    OptionF32,
+    /// `Option<f64>` — wire struct gets `X_value: u64` (bit-encoded) and `X_has: u8`.
+    OptionF64,
     /// Any other type — assumed to be a `#[repr(u8)]` enum → `u8`.
     Enum,
 }
@@ -143,6 +150,16 @@ fn is_numeric(ty: &Type) -> bool {
         }
     }
     false
+}
+
+/// Returns the type name string for a simple path type, or `None`.
+fn type_name(ty: &Type) -> Option<String> {
+    if let Type::Path(p) = ty {
+        if let Some(seg) = p.path.segments.last() {
+            return Some(seg.ident.to_string());
+        }
+    }
+    None
 }
 
 /// Classify a field's type into a [`FieldKind`].
@@ -172,7 +189,12 @@ fn classify(ty: &Type) -> FieldKind {
                     if let PathArguments::AngleBracketed(args) = &seg.arguments {
                         if let Some(GenericArgument::Type(inner)) = args.args.first() {
                             if is_numeric(inner) {
-                                return FieldKind::OptionNumeric(inner.clone());
+                                let name = type_name(inner).unwrap_or_default();
+                                return match name.as_str() {
+                                    "f32" => FieldKind::OptionF32,
+                                    "f64" => FieldKind::OptionF64,
+                                    _ => FieldKind::OptionInt(inner.clone()),
+                                };
                             }
                         }
                     }
@@ -198,7 +220,10 @@ fn classify(ty: &Type) -> FieldKind {
 /// 1. **`{Name}Wire`** — a `#[repr(C)] Clone + Copy` struct with all fields
 ///    converted to Pod-safe types, plus `unsafe impl Pod`.
 /// 2. **`From<Name> for {Name}Wire`** — converts the domain struct to wire.
-/// 3. **`From<{Name}Wire> for Name`** — converts the wire struct back.
+/// 3. **`{Name}Wire::into_domain(self) -> Name`** — converts the wire struct
+///    back. This is an `unsafe` method for structs containing enum fields
+///    (since the enum discriminant is not validated), or a safe `From` impl
+///    for structs without enum fields.
 ///
 /// # Field type mappings
 ///
@@ -208,15 +233,24 @@ fn classify(ty: &Type) -> FieldKind {
 /// | `usize` | `u64` | `as u64` | `as usize` |
 /// | `isize` | `i64` | `as i64` | `as isize` |
 /// | `bool` | `u8` | `if v { 1 } else { 0 }` | `v != 0` |
-/// | `Option<T>` (T numeric) | `u64` | `Some(x) => x as u64, None => 0` | `0 => None, v => Some(v as T)` |
+/// | `Option<T>` (T integer) | `X_value: u64, X_has: u8` | `Some(v) => (v as u64, 1), None => (0, 0)` | `has != 0 => Some(value as T), else None` |
+/// | `Option<f32>` | `X_value: u64, X_has: u8` | `Some(v) => (v.to_bits() as u64, 1), None => (0, 0)` | `has != 0 => Some(f32::from_bits(value as u32)), else None` |
+/// | `Option<f64>` | `X_value: u64, X_has: u8` | `Some(v) => (v.to_bits(), 1), None => (0, 0)` | `has != 0 => Some(f64::from_bits(value)), else None` |
 /// | `[T; N]` (T: Pod) | same | passthrough | passthrough |
-/// | Any other type | `u8` | `v as u8` | `transmute(v)` |
+/// | Any other type | `u8` | `v as u8` | `transmute(v)` (unsafe) |
 ///
 /// # Enum safety
 ///
-/// Enum fields are converted via `transmute` from `u8`. The enum **must**
-/// have `#[repr(u8)]` — the macro emits a compile-time `size_of` check to
-/// enforce this.
+/// Enum fields are stored as raw `u8` on the wire. Converting back requires
+/// that the byte holds a valid discriminant. Because the macro cannot verify
+/// enum variants at compile time, structs with enum fields generate an
+/// `unsafe fn into_domain(self) -> DomainType` method on the wire struct
+/// instead of a safe `From` impl. Callers must ensure enum fields contain
+/// valid discriminants (which is always the case when the wire data was
+/// produced by a valid domain value via `From<Domain> for Wire`).
+///
+/// The enum **must** have `#[repr(u8)]` — the macro emits a compile-time
+/// `size_of` check to enforce this.
 ///
 /// # Example
 ///
@@ -233,7 +267,8 @@ fn classify(ty: &Type) -> FieldKind {
 ///     filled: bool,
 ///     tag: Option<u32>,
 /// }
-/// // Generates: OrderWire, From<Order> for OrderWire, From<OrderWire> for Order
+/// // Generates: OrderWire, From<Order> for OrderWire,
+/// //            OrderWire::into_domain (unsafe, due to enum field)
 /// ```
 #[proc_macro_derive(Message)]
 pub fn derive_message(input: TokenStream) -> TokenStream {
@@ -268,6 +303,7 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
     let mut to_wire = Vec::new();
     let mut from_wire = Vec::new();
     let mut assertions = Vec::new();
+    let mut has_enum_fields = false;
 
     for field in &fields {
         let fname = field.ident.as_ref().unwrap();
@@ -295,23 +331,74 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
                 to_wire.push(quote! { #fname: src.#fname as i64 });
                 from_wire.push(quote! { #fname: src.#fname as isize });
             }
-            FieldKind::OptionNumeric(inner) => {
-                wire_fields.push(quote! { pub #fname: u64 });
+            FieldKind::OptionInt(inner) => {
+                let value_field = format_ident!("{}_value", fname);
+                let has_field = format_ident!("{}_has", fname);
+                wire_fields.push(quote! { pub #value_field: u64 });
+                wire_fields.push(quote! { pub #has_field: u8 });
                 to_wire.push(quote! {
-                    #fname: match src.#fname {
+                    #value_field: match src.#fname {
                         Some(v) => v as u64,
                         None => 0,
                     }
                 });
+                to_wire.push(quote! {
+                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
+                });
                 from_wire.push(quote! {
-                    #fname: if src.#fname == 0 {
-                        None
+                    #fname: if src.#has_field != 0 {
+                        Some(src.#value_field as #inner)
                     } else {
-                        Some(src.#fname as #inner)
+                        None
+                    }
+                });
+            }
+            FieldKind::OptionF32 => {
+                let value_field = format_ident!("{}_value", fname);
+                let has_field = format_ident!("{}_has", fname);
+                wire_fields.push(quote! { pub #value_field: u64 });
+                wire_fields.push(quote! { pub #has_field: u8 });
+                to_wire.push(quote! {
+                    #value_field: match src.#fname {
+                        Some(v) => v.to_bits() as u64,
+                        None => 0,
+                    }
+                });
+                to_wire.push(quote! {
+                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
+                });
+                from_wire.push(quote! {
+                    #fname: if src.#has_field != 0 {
+                        Some(f32::from_bits(src.#value_field as u32))
+                    } else {
+                        None
+                    }
+                });
+            }
+            FieldKind::OptionF64 => {
+                let value_field = format_ident!("{}_value", fname);
+                let has_field = format_ident!("{}_has", fname);
+                wire_fields.push(quote! { pub #value_field: u64 });
+                wire_fields.push(quote! { pub #has_field: u8 });
+                to_wire.push(quote! {
+                    #value_field: match src.#fname {
+                        Some(v) => v.to_bits(),
+                        None => 0,
+                    }
+                });
+                to_wire.push(quote! {
+                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
+                });
+                from_wire.push(quote! {
+                    #fname: if src.#has_field != 0 {
+                        Some(f64::from_bits(src.#value_field))
+                    } else {
+                        None
                     }
                 });
             }
             FieldKind::Enum => {
+                has_enum_fields = true;
                 wire_fields.push(quote! { pub #fname: u8 });
                 to_wire.push(quote! { #fname: src.#fname as u8 });
                 from_wire.push(quote! {
@@ -337,6 +424,40 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
         }
     }
 
+    // If the struct has enum fields, generate an unsafe `into_domain` method
+    // instead of a safe `From` impl to avoid exposing transmute through safe code.
+    let from_wire_impl = if has_enum_fields {
+        quote! {
+            impl #wire_name {
+                /// Convert wire struct back to domain struct.
+                ///
+                /// # Safety
+                ///
+                /// Enum fields must contain valid discriminant values.
+                /// This is guaranteed when the wire data was produced by
+                /// `From<#name> for #wire_name`.
+                #[inline]
+                pub unsafe fn into_domain(self) -> #name {
+                    let src = self;
+                    #name {
+                        #(#from_wire),*
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl From<#wire_name> for #name {
+                #[inline]
+                fn from(src: #wire_name) -> Self {
+                    #name {
+                        #(#from_wire),*
+                    }
+                }
+            }
+        }
+    };
+
     let expanded = quote! {
         // Compile-time assertions for enum fields
         #(#assertions)*
@@ -361,14 +482,7 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
             }
         }
 
-        impl From<#wire_name> for #name {
-            #[inline]
-            fn from(src: #wire_name) -> Self {
-                #name {
-                    #(#from_wire),*
-                }
-            }
-        }
+        #from_wire_impl
     };
 
     TokenStream::from(expanded)
