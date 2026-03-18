@@ -173,13 +173,12 @@ impl<T: Pod> Publisher<T> {
 
     /// Publish a batch of values.
     ///
-    /// On a **lossy** channel: writes all values with a single cursor update
-    /// at the end — consumers see the entire batch appear at once, and
-    /// cache-line bouncing on the shared cursor is reduced to one store.
+    /// Both lossy and bounded channels advance the cursor per-value, so
+    /// a `subscribe()` call concurrent with publication will only see
+    /// messages published after the subscribe point (future-only contract).
     ///
     /// On a **bounded** channel: spin-waits for room before each value,
-    /// ensuring no message loss. The cursor advances per-value (not batched),
-    /// so consumers may observe a partial batch during publication.
+    /// ensuring no message loss.
     #[inline]
     pub fn publish_batch(&mut self, values: &[T]) {
         if values.is_empty() {
