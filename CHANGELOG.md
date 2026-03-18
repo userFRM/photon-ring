@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Performance
+- **PREFETCHW on x86 publisher write path:** Replaces `PREFETCHT0` (Shared
+  state) with `PREFETCHW` (Exclusive state) when compiled with
+  `-C target-cpu=native` on Intel Broadwell+ / all AMD x86-64. Eliminates
+  the RFO stall when subscribers have the slot cache line in Shared state.
+  Falls back to `PREFETCHT0` on generic builds (zero regression).
+  Measured: **-10.7% fanout 1 sub, -14.6% fanout 2 subs**.
+- **Multi-cache-line prefetch for large T:** `prefetch_write_next` now
+  prefetches all cache lines of the next slot. The loop bound is a
+  compile-time constant; LLVM fully unrolls it. Zero overhead for T ≤ 56B
+  (single cache line).
+- **WFE in `recv()` Phase 2 on AArch64:** `Subscriber::recv()` and
+  `SubscriberGroup::recv()` now use SEVL+WFE instead of YIELD (spin_loop)
+  in the power-efficient phase. Near-zero power, ~12 ns cache-line-event
+  wakeup.
+- **Dead `rdtsc` asm block removed:** `deadline_100us()` had a dead
+  inline-asm `rdtsc` whose outputs were discarded, followed by a second
+  `_rdtsc()` call. Removed (~20-25 cycles saved per UMWAIT/TPAUSE call).
+
+### Added
+- **Cross-core PREFETCHW benchmark** (`benches/prefetchw_crosscore.rs`):
+  Pinned Criterion benchmark measuring publish throughput and RDTSCP
+  one-way latency across same-core, HT-sibling, and cross-physical-core
+  topologies.
+
 ## [2.3.0] - 2026-03-18
 
 ### Added
