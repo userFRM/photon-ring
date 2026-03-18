@@ -317,13 +317,13 @@ fn option_f64_zero_value_roundtrip() {
 fn option_f64_fractional_preserved() {
     // Fractional values must not be truncated to integers
     let src = FloatOptions {
-        opt_f32: Some(3.14f32),
-        opt_f64: Some(2.718281828459045f64),
+        opt_f32: Some(3.125f32),
+        opt_f64: Some(2.719f64),
         plain: 0,
     };
 
     let wire: FloatOptionsWire = src.into();
     let back: FloatOptions = wire.into();
-    assert_eq!(back.opt_f32, Some(3.14f32));
-    assert_eq!(back.opt_f64, Some(2.718281828459045f64));
+    assert_eq!(back.opt_f32, Some(3.125f32));
+    assert_eq!(back.opt_f64, Some(2.719f64));
 }
