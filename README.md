@@ -48,7 +48,7 @@ assert_eq!(s.try_recv(), Ok(100));
 
 ```toml
 [dependencies]
-photon-ring = "2.1.0"
+photon-ring = "2.3.0"
 ```
 
 Optional features:
@@ -56,7 +56,7 @@ Optional features:
 - `derive`: enables `#[derive(photon_ring::DerivePod)]` for user-defined `Pod` types.
 - `hugepages`: enables Linux memory controls such as `mlock`, `prefault`, and NUMA helpers.
 
-Rust 1.70+ is supported.
+Rust 1.94+ is supported. For best performance, compile with `-C target-cpu=native` to enable `PREFETCHW` and other CPU-specific optimizations.
 
 ## The problem
 
