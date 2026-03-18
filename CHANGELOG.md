@@ -36,9 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`#[derive(Message)]` proc macro:** Automatic Pod-compatible wire struct
-  generation from normal Rust structs. Handles `bool` → `u8`, `Option<T>` → `u64`,
+  generation from normal Rust structs. Handles `bool` → `u8`, `Option<T>` →
+  `{value, has}` pair (preserves `Some(0)`, float precision, u128/i128),
   `#[repr(u8)]` enums → `u8`, `usize` → `u64` transparently. Generates
-  `{Name}Wire` struct + bidirectional `From` conversions + `unsafe impl Pod`.
+  `{Name}Wire` struct + `From` conversions + `unsafe impl Pod`. Structs with
+  enum fields use `unsafe fn into_domain()` instead of safe `From`.
 - 9 new tests for Message derive (roundtrip, bool, option, enum, arrays, publish).
 
 ### Changed

@@ -242,7 +242,11 @@ fn classify(ty: &Type) -> FieldKind {
 /// | `usize` | `u64` | `as u64` | `as usize` |
 /// | `isize` | `i64` | `as i64` | `as isize` |
 /// | `bool` | `u8` | `if v { 1 } else { 0 }` | `v != 0` |
-/// | `Option<T>` (T integer) | `X_value: u64, X_has: u8` | `Some(v) => (v as u64, 1), None => (0, 0)` | `has != 0 => Some(value as T), else None` |
+/// | `Option<T>` (T ≤64-bit int) | `X_value: u64, X_has: u8` | `Some(v) => (v as u64, 1), None => (0, 0)` | `has != 0 => Some(value as T), else None` |
+/// | `Option<u128>` | `X_value: u128, X_has: u8` | `Some(v) => (v, 1), None => (0, 0)` | `has != 0 => Some(value), else None` |
+/// | `Option<i128>` | `X_value: u128, X_has: u8` | `Some(v) => (v as u128, 1), None => (0, 0)` | `has != 0 => Some(value as i128), else None` |
+/// | `Option<usize>` | `X_value: u64, X_has: u8` | `Some(v) => (v as u64, 1), None => (0, 0)` | `has != 0 => Some(value as usize), else None` |
+/// | `Option<isize>` | `X_value: i64, X_has: u8` | `Some(v) => (v as i64, 1), None => (0, 0)` | `has != 0 => Some(value as isize), else None` |
 /// | `Option<f32>` | `X_value: u64, X_has: u8` | `Some(v) => (v.to_bits() as u64, 1), None => (0, 0)` | `has != 0 => Some(f32::from_bits(value as u32)), else None` |
 /// | `Option<f64>` | `X_value: u64, X_has: u8` | `Some(v) => (v.to_bits(), 1), None => (0, 0)` | `has != 0 => Some(f64::from_bits(value)), else None` |
 /// | `[T; N]` (T: Pod) | same | passthrough | passthrough |

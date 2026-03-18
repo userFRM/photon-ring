@@ -327,3 +327,75 @@ fn option_f64_fractional_preserved() {
     assert_eq!(back.opt_f32, Some(3.125f32));
     assert_eq!(back.opt_f64, Some(2.719f64));
 }
+
+// -------------------------------------------------------------------------
+// Option<u128>, Option<i128>, Option<usize>, Option<isize> regression tests
+// -------------------------------------------------------------------------
+
+#[derive(photon_ring::DeriveMessage)]
+struct WideOptions {
+    a: u64,
+    big_u: Option<u128>,
+    big_i: Option<i128>,
+    sz: Option<usize>,
+    isz: Option<isize>,
+}
+
+#[test]
+fn option_u128_max_roundtrip() {
+    let src = WideOptions {
+        a: 1,
+        big_u: Some(u128::MAX),
+        big_i: Some(-1i128),
+        sz: Some(usize::MAX),
+        isz: Some(-1isize),
+    };
+    let wire: WideOptionsWire = src.into();
+    assert_eq!(wire.big_u_has, 1);
+    assert_eq!(wire.big_u_value, u128::MAX);
+    let back: WideOptions = wire.into();
+    assert_eq!(back.big_u, Some(u128::MAX));
+    assert_eq!(back.big_i, Some(-1i128));
+    assert_eq!(back.sz, Some(usize::MAX));
+    assert_eq!(back.isz, Some(-1isize));
+}
+
+#[test]
+fn option_u128_none_roundtrip() {
+    let src = WideOptions {
+        a: 0,
+        big_u: None,
+        big_i: None,
+        sz: None,
+        isz: None,
+    };
+    let wire: WideOptionsWire = src.into();
+    assert_eq!(wire.big_u_has, 0);
+    assert_eq!(wire.big_i_has, 0);
+    assert_eq!(wire.sz_has, 0);
+    assert_eq!(wire.isz_has, 0);
+    let back: WideOptions = wire.into();
+    assert_eq!(back.big_u, None);
+    assert_eq!(back.big_i, None);
+    assert_eq!(back.sz, None);
+    assert_eq!(back.isz, None);
+}
+
+#[test]
+fn option_u128_zero_roundtrip() {
+    let src = WideOptions {
+        a: 0,
+        big_u: Some(0u128),
+        big_i: Some(0i128),
+        sz: Some(0usize),
+        isz: Some(0isize),
+    };
+    let wire: WideOptionsWire = src.into();
+    assert_eq!(wire.big_u_has, 1);
+    assert_eq!(wire.big_u_value, 0);
+    let back: WideOptions = wire.into();
+    assert_eq!(back.big_u, Some(0u128));
+    assert_eq!(back.big_i, Some(0i128));
+    assert_eq!(back.sz, Some(0usize));
+    assert_eq!(back.isz, Some(0isize));
+}

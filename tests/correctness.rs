@@ -209,6 +209,28 @@ fn batch_publish_empty() {
 }
 
 // -------------------------------------------------------------------------
+// publish_batch + subscribe future-only contract
+// -------------------------------------------------------------------------
+
+#[test]
+fn subscribe_during_batch_sees_only_future() {
+    // Regression: lossy publish_batch must not let a mid-batch subscribe()
+    // read pre-subscription data. With per-slot cursor advancement, a
+    // subscriber created after the batch completes sees only future messages.
+    let (mut p, s) = channel::<u64>(64);
+
+    p.publish_batch(&[10, 20, 30, 40, 50]);
+
+    // Subscribe AFTER the batch — should see nothing (future only).
+    let mut sub = s.subscribe();
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+
+    // New messages after subscribe should be visible.
+    p.publish(60);
+    assert_eq!(sub.try_recv(), Ok(60));
+}
+
+// -------------------------------------------------------------------------
 // Subscribe timing (future only vs from_oldest)
 // -------------------------------------------------------------------------
 
