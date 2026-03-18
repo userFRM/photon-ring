@@ -182,19 +182,11 @@ mod umwait {
     /// On a 3 GHz CPU, 100µs ≈ 300,000 cycles.
     #[inline(always)]
     fn deadline_100us() -> (u32, u32) {
-        let tsc: u64;
-        unsafe {
-            core::arch::asm!(
-                "rdtsc",
-                out("eax") _,
-                out("edx") _,
-                // rdtsc writes eax and edx; we read the full 64-bit value
-                // via a combined read below.
-                options(nostack, preserves_flags),
-            );
-            // Re-read via the intrinsic for a clean 64-bit value.
-            tsc = core::arch::x86_64::_rdtsc();
-        }
+        // Use _rdtsc() directly. The previous version had a dead inline-asm
+        // `rdtsc` block whose eax/edx outputs were discarded (bound to `_`),
+        // immediately followed by a second _rdtsc() call for the actual value.
+        // That wasted ~20–25 cycles per UMWAIT/TPAUSE call. Removed.
+        let tsc = unsafe { core::arch::x86_64::_rdtsc() };
         let deadline = tsc.wrapping_add(300_000); // ~100µs at 3 GHz
         (deadline as u32, (deadline >> 32) as u32) // (eax, edx)
     }
