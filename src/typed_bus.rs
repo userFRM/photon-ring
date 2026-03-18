@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use alloc::boxed::Box;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use core::any::{Any, TypeId};
 use hashbrown::HashMap;
 use spin::Mutex;
@@ -79,13 +79,9 @@ impl TypedBus {
     /// - Panics if the publisher for this topic was already taken.
     pub fn publisher<T: Pod>(&self, topic: &str) -> Publisher<T> {
         let mut topics = self.topics.lock();
-        if !topics.contains_key(topic) {
-            topics.insert(
-                topic.to_string(),
-                Self::make_slot::<T>(self.default_capacity),
-            );
-        }
-        let slot = topics.get_mut(topic).unwrap();
+        let slot = topics
+            .entry_ref(topic)
+            .or_insert_with(|| Self::make_slot::<T>(self.default_capacity));
         let entry = Self::downcast_mut::<T>(slot, topic);
         entry
             .publisher
@@ -101,13 +97,9 @@ impl TypedBus {
     /// Panics if the topic already exists with a different type `T`.
     pub fn try_publisher<T: Pod>(&self, topic: &str) -> Option<Publisher<T>> {
         let mut topics = self.topics.lock();
-        if !topics.contains_key(topic) {
-            topics.insert(
-                topic.to_string(),
-                Self::make_slot::<T>(self.default_capacity),
-            );
-        }
-        let slot = topics.get_mut(topic).unwrap();
+        let slot = topics
+            .entry_ref(topic)
+            .or_insert_with(|| Self::make_slot::<T>(self.default_capacity));
         let entry = Self::downcast_mut::<T>(slot, topic);
         entry.publisher.take()
     }
@@ -119,13 +111,9 @@ impl TypedBus {
     /// Panics if the topic already exists with a different type `T`.
     pub fn subscribe<T: Pod>(&self, topic: &str) -> Subscriber<T> {
         let mut topics = self.topics.lock();
-        if !topics.contains_key(topic) {
-            topics.insert(
-                topic.to_string(),
-                Self::make_slot::<T>(self.default_capacity),
-            );
-        }
-        let slot = topics.get_mut(topic).unwrap();
+        let slot = topics
+            .entry_ref(topic)
+            .or_insert_with(|| Self::make_slot::<T>(self.default_capacity));
         let entry = Self::downcast_mut::<T>(slot, topic);
         entry.subscribable.subscribe()
     }
@@ -137,13 +125,9 @@ impl TypedBus {
     /// Panics if the topic already exists with a different type `T`.
     pub fn subscribable<T: Pod>(&self, topic: &str) -> Subscribable<T> {
         let mut topics = self.topics.lock();
-        if !topics.contains_key(topic) {
-            topics.insert(
-                topic.to_string(),
-                Self::make_slot::<T>(self.default_capacity),
-            );
-        }
-        let slot = topics.get_mut(topic).unwrap();
+        let slot = topics
+            .entry_ref(topic)
+            .or_insert_with(|| Self::make_slot::<T>(self.default_capacity));
         let entry = Self::downcast_mut::<T>(slot, topic);
         entry.subscribable.clone()
     }

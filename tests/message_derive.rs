@@ -62,9 +62,11 @@ fn order_to_wire_and_back() {
     assert_eq!(wire.qty, 100);
     assert_eq!(wire.side, 0); // Buy = 0
     assert_eq!(wire.filled, 1); // true = 1
-    assert_eq!(wire.tag, 42); // Some(42) = 42
+    assert_eq!(wire.tag_value, 42); // Some(42) value
+    assert_eq!(wire.tag_has, 1); // Some(_) present
 
-    let back: Order = wire.into();
+    // Enum fields use unsafe into_domain
+    let back: Order = unsafe { wire.into_domain() };
     assert_eq!(back.price, 123.45);
     assert_eq!(back.qty, 100);
     assert_eq!(back.side, Side::Buy);
@@ -85,9 +87,9 @@ fn bool_false_roundtrip() {
     let wire: OrderWire = order.into();
     assert_eq!(wire.filled, 0);
     assert_eq!(wire.side, 1); // Sell = 1
-    assert_eq!(wire.tag, 0); // None = 0
+    assert_eq!(wire.tag_has, 0); // None
 
-    let back: Order = wire.into();
+    let back: Order = unsafe { wire.into_domain() };
     assert!(!back.filled);
     assert_eq!(back.side, Side::Sell);
     assert_eq!(back.tag, None);
@@ -104,10 +106,29 @@ fn option_none_is_zero() {
     };
 
     let wire: OrderWire = order.into();
-    assert_eq!(wire.tag, 0);
+    assert_eq!(wire.tag_has, 0);
 
-    let back: Order = wire.into();
+    let back: Order = unsafe { wire.into_domain() };
     assert_eq!(back.tag, None);
+}
+
+#[test]
+fn option_some_zero_roundtrip() {
+    // CRITICAL 1 regression test: Some(0) must NOT be confused with None.
+    let order = Order {
+        price: 1.0,
+        qty: 1,
+        side: Side::Buy,
+        filled: false,
+        tag: Some(0),
+    };
+
+    let wire: OrderWire = order.into();
+    assert_eq!(wire.tag_value, 0);
+    assert_eq!(wire.tag_has, 1); // has flag distinguishes Some(0) from None
+
+    let back: Order = unsafe { wire.into_domain() };
+    assert_eq!(back.tag, Some(0));
 }
 
 // -------------------------------------------------------------------------
@@ -129,7 +150,7 @@ fn wire_struct_through_channel() {
 
     pub_.publish(order.into());
     let wire = sub.try_recv().unwrap();
-    let back: Order = wire.into();
+    let back: Order = unsafe { wire.into_domain() };
 
     assert_eq!(back.price, 99.99);
     assert_eq!(back.qty, 50);
@@ -139,7 +160,7 @@ fn wire_struct_through_channel() {
 }
 
 // -------------------------------------------------------------------------
-// All-numeric struct (passthrough only)
+// All-numeric struct (passthrough only) -- no enum, so From is generated
 // -------------------------------------------------------------------------
 
 #[derive(photon_ring::DeriveMessage)]
@@ -162,6 +183,7 @@ fn all_numeric_passthrough() {
     assert_eq!(wire.ask, 4.56);
     assert_eq!(wire.volume, 1000);
 
+    // No enum fields, so safe From is generated
     let back: Tick = wire.into();
     assert_eq!(back.bid, 1.23);
     assert_eq!(back.ask, 4.56);
@@ -192,6 +214,7 @@ fn usize_isize_conversion() {
     assert_eq!(wire.offset, -7i64);
     assert_eq!(wire.value, 100);
 
+    // No enum fields, so safe From is generated
     let back: Indexed = wire.into();
     assert_eq!(back.index, 42usize);
     assert_eq!(back.offset, -7isize);
@@ -219,7 +242,88 @@ fn array_passthrough() {
     assert_eq!(wire.data, [1, 2, 3, 4]);
     assert_eq!(wire.value, 99);
 
+    // No enum fields, so safe From is generated
     let back: WithArray = wire.into();
     assert_eq!(back.data, [1, 2, 3, 4]);
     assert_eq!(back.value, 99);
+}
+
+// -------------------------------------------------------------------------
+// Option<f32> and Option<f64> precision preservation
+// -------------------------------------------------------------------------
+
+#[derive(photon_ring::DeriveMessage)]
+struct FloatOptions {
+    opt_f32: Option<f32>,
+    opt_f64: Option<f64>,
+    plain: u32,
+}
+
+#[test]
+fn option_f64_preserves_precision() {
+    let src = FloatOptions {
+        opt_f32: Some(1.5f32),
+        opt_f64: Some(1.5f64),
+        plain: 1,
+    };
+
+    let wire: FloatOptionsWire = src.into();
+    assert_eq!(wire.opt_f32_has, 1);
+    assert_eq!(wire.opt_f64_has, 1);
+
+    // No enum fields, so safe From is generated
+    let back: FloatOptions = wire.into();
+    assert_eq!(back.opt_f32, Some(1.5f32));
+    assert_eq!(back.opt_f64, Some(1.5f64));
+}
+
+#[test]
+fn option_f64_none_roundtrip() {
+    let src = FloatOptions {
+        opt_f32: None,
+        opt_f64: None,
+        plain: 42,
+    };
+
+    let wire: FloatOptionsWire = src.into();
+    assert_eq!(wire.opt_f32_has, 0);
+    assert_eq!(wire.opt_f64_has, 0);
+
+    let back: FloatOptions = wire.into();
+    assert_eq!(back.opt_f32, None);
+    assert_eq!(back.opt_f64, None);
+    assert_eq!(back.plain, 42);
+}
+
+#[test]
+fn option_f64_zero_value_roundtrip() {
+    // Some(0.0) must NOT be confused with None
+    let src = FloatOptions {
+        opt_f32: Some(0.0f32),
+        opt_f64: Some(0.0f64),
+        plain: 0,
+    };
+
+    let wire: FloatOptionsWire = src.into();
+    assert_eq!(wire.opt_f32_has, 1);
+    assert_eq!(wire.opt_f64_has, 1);
+
+    let back: FloatOptions = wire.into();
+    assert_eq!(back.opt_f32, Some(0.0f32));
+    assert_eq!(back.opt_f64, Some(0.0f64));
+}
+
+#[test]
+fn option_f64_fractional_preserved() {
+    // Fractional values must not be truncated to integers
+    let src = FloatOptions {
+        opt_f32: Some(3.14f32),
+        opt_f64: Some(2.718281828459045f64),
+        plain: 0,
+    };
+
+    let wire: FloatOptionsWire = src.into();
+    let back: FloatOptions = wire.into();
+    assert_eq!(back.opt_f32, Some(3.14f32));
+    assert_eq!(back.opt_f64, Some(2.718281828459045f64));
 }

@@ -36,7 +36,7 @@ protocol and a model-checking configuration for the TLC model checker.
 - The `ReaderStampMismatch` action detects when a slot has been
   overwritten (stamp > expected) and advances the reader cursor to the
   oldest available message, matching the `TryRecvError::Lagged` path in
-  `src/channel.rs`.
+  `src/channel/`.
 
 ## Prerequisites
 
@@ -118,10 +118,10 @@ values of all variables.
 | TLA+ action | Rust code |
 |---|---|
 | `WriterBegin` | `Slot::write` -- `stamp.store(writing, Relaxed)` + release fence |
-| `WriterData` | `Slot::write` -- `ptr::write(value)` |
+| `WriterData` | `Slot::write` -- `write_volatile(value)` |
 | `WriterFinish` | `Slot::write` -- `stamp.store(done, Release)` + cursor store |
 | `ReaderLoadStamp1` | `Slot::try_read` -- `stamp.load(Acquire)` |
-| `ReaderLoadValue` | `Slot::try_read` -- `ptr::read(value)` |
+| `ReaderLoadValue` | `Slot::try_read` -- `read_volatile(value)` |
 | `ReaderVerify` | `Slot::try_read` -- second `stamp.load(Acquire)`, compare |
 | `ReaderRetryOdd` | `Slot::try_read` -- `s1 & 1 != 0` branch |
 | `ReaderStampMismatch` | `Subscriber::read_slot` -- lag detection slow path |
@@ -133,9 +133,9 @@ values of all variables.
 The TLA+ specification covers the single-producer, multi-consumer (SPMC)
 protocol exclusively. The multi-producer path (`MpPublisher`) uses a
 fundamentally different cursor advancement protocol based on
-`compare_exchange` (CAS) for sequence claiming and stamp-based spin-waiting
-for slot availability. None of this is present in the model. Bugs in the
-MPMC CAS retry loop, ABA hazards, or producer-to-producer ordering would
+`fetch_add` for sequence claiming and stamp-based predecessor waiting
+for cursor advancement. None of this is present in the model. Bugs in the
+MPMC stamp-based waiting, ABA hazards, or producer-to-producer ordering would
 not be caught by this specification.
 
 ### Sequential consistency, not Acquire/Release
