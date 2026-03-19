@@ -20,6 +20,10 @@
 //!   is upheld by `&mut self` on [`Publisher::publish`].
 //! - **`atomic-slots` feature** — formally sound variant that uses `AtomicU64` stripes
 //!   instead of `write_volatile`. Zero cost on x86-64. See the `atomic-slots` feature flag.
+//! - **Arbitrary capacity** — any ring size >= 2 via Lemire fastmod; power-of-two
+//!   uses bitwise AND (zero regression).
+//! - **Companion crates** — [`photon-ring-async`] for runtime-agnostic async wrappers,
+//!   [`photon-ring-metrics`] for framework-agnostic observability.
 //!
 //! ## Quick start
 //!

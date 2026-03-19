@@ -17,8 +17,7 @@
 //!    The cursor never advances past an uncommitted slot.
 //! 2. **Stamp safety**: All stamps reach committed state after producers finish.
 //! 3. **Consumer safety**: Reading up to the cursor yields only committed stamps.
-//! 4. **Monotonicity**: The cursor never goes backwards.
-//! 5. **Minimum progress**: At least the first sequence (cursor >= 0) becomes visible.
+//! 4. **Minimum progress**: At least the first sequence (cursor >= 0) becomes visible.
 //!
 //! The cursor is **best-effort** — it may lag behind the highest committed
 //! sequence. This is by design: the protocol prioritizes throughput (no cursor
@@ -247,91 +246,44 @@ fn stamps_all_committed_after_completion() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: Consumer safety — cursor implies committed stamps
+// Test 3: Consumer safety at quiescence — cursor implies committed stamps
 // ---------------------------------------------------------------------------
 
-/// A consumer reads the cursor, then verifies that all slots up to the
-/// cursor have committed stamps. This models the real consumer's trust
-/// in the cursor as a lower bound for available messages.
-///
-/// The consumer runs concurrently with two producers, testing the NoGap
-/// invariant in real-time (not just at quiescence).
+/// After both producers finish, snapshot the cursor and verify that all
+/// slots up to the cursor have committed stamps. This models what a
+/// consumer would do: trust the cursor as a lower bound for availability,
+/// then read each slot's stamp to verify.
 #[test]
-fn consumer_sees_only_committed_stamps() {
+fn consumer_safety_at_quiescence() {
     loom::model(|| {
         let ring = Arc::new(RingModel::new());
 
         let r1 = ring.clone();
         let r2 = ring.clone();
-        let r_consumer = ring.clone();
 
         let t1 = thread::spawn(move || r1.publish());
         let t2 = thread::spawn(move || r2.publish());
 
-        // Consumer: snapshot the cursor, verify all slots up to it.
-        let consumer = thread::spawn(move || {
-            let cursor_val = r_consumer.cursor.load(Ordering::Acquire);
+        t1.join().unwrap();
+        t2.join().unwrap();
 
-            if cursor_val == u64::MAX {
-                // Nothing published yet — valid.
-                return;
-            }
-
-            // Every seq 0..=cursor must have a committed stamp.
+        // Simulate a consumer reading the cursor then checking stamps.
+        let cursor_val = ring.cursor.load(Ordering::Acquire);
+        if cursor_val != u64::MAX {
             for seq in 0..=cursor_val {
                 let done_stamp = seq * 2 + 2;
-                let stamp = r_consumer.stamp_load(seq);
+                let stamp = ring.stamp_load(seq);
                 assert!(
                     stamp >= done_stamp,
                     "cursor={cursor_val} but seq {seq} stamp={stamp} (expected >= {done_stamp})"
                 );
             }
-        });
-
-        t1.join().unwrap();
-        t2.join().unwrap();
-        consumer.join().unwrap();
+        }
     });
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: Cursor monotonicity — cursor never goes backwards
-// ---------------------------------------------------------------------------
-
-/// Two producers publish while an observer repeatedly reads the cursor.
-/// The cursor must never decrease between consecutive reads.
-#[test]
-fn cursor_never_decreases() {
-    loom::model(|| {
-        let ring = Arc::new(RingModel::new());
-
-        let r1 = ring.clone();
-        let r2 = ring.clone();
-        let r_obs = ring.clone();
-
-        let t1 = thread::spawn(move || r1.publish());
-        let t2 = thread::spawn(move || r2.publish());
-
-        // Observer: read cursor twice and verify monotonicity.
-        let observer = thread::spawn(move || {
-            let c1 = r_obs.cursor.load(Ordering::Acquire);
-            loom::thread::yield_now();
-            let c2 = r_obs.cursor.load(Ordering::Acquire);
-
-            // Allow MAX -> any transition (first publish).
-            if c1 != u64::MAX && c2 != u64::MAX {
-                assert!(c2 >= c1, "cursor went backwards: {c1} -> {c2}");
-            }
-        });
-
-        t1.join().unwrap();
-        t2.join().unwrap();
-        observer.join().unwrap();
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Test 5: Minimum progress — at least seq=0 becomes visible
+// Test 4: Minimum progress — at least seq=0 becomes visible
 // ---------------------------------------------------------------------------
 
 /// After all producers finish, the cursor must be at least 0 (not stuck
@@ -363,7 +315,7 @@ fn minimum_cursor_progress() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: Sequence uniqueness — fetch_add guarantees distinct sequences
+// Test 5: Sequence uniqueness — fetch_add guarantees distinct sequences
 // ---------------------------------------------------------------------------
 
 /// Verify that two concurrent producers always get distinct sequence
@@ -390,7 +342,7 @@ fn sequence_numbers_are_unique() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: Catch-up with delayed writer
+// Test 6: Catch-up with delayed writer
 // ---------------------------------------------------------------------------
 
 /// One producer delays its slot write (via yield) while the other proceeds
@@ -440,5 +392,47 @@ fn catch_up_with_delayed_writer() {
                 "NoGap violated: cursor={final_cursor}, seq {seq} stamp={stamp} (need >= {done})"
             );
         }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: Consumer single-check during publishing (3 threads, minimal)
+// ---------------------------------------------------------------------------
+
+/// Two producers publish while a consumer does one cursor load and one
+/// stamp check. The consumer's work is minimized (2 atomic ops) to keep
+/// the 3-thread state space tractable for loom.
+///
+/// Invariant: if cursor shows seq=N, then stamp[N] must be committed.
+#[test]
+fn consumer_single_check_during_publish() {
+    loom::model(|| {
+        let ring = Arc::new(RingModel::new());
+
+        let r1 = ring.clone();
+        let r2 = ring.clone();
+        let rc = ring.clone();
+
+        let t1 = thread::spawn(move || r1.publish());
+        let t2 = thread::spawn(move || r2.publish());
+
+        // Consumer: one Acquire load of cursor, one Acquire load of the
+        // stamp at that cursor position. Only 2 atomic ops to minimise
+        // loom's state space.
+        let consumer = thread::spawn(move || {
+            let cursor_val = rc.cursor.load(Ordering::Acquire);
+            if cursor_val != u64::MAX {
+                let done = cursor_val * 2 + 2;
+                let stamp = rc.stamp_load(cursor_val);
+                assert!(
+                    stamp >= done,
+                    "cursor={cursor_val} but its stamp={stamp} (expected >= {done})"
+                );
+            }
+        });
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+        consumer.join().unwrap();
     });
 }

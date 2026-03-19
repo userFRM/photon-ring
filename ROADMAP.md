@@ -66,6 +66,30 @@
 - [x] `TypedBus` with `publisher::<T>(name)` / `subscribe::<T>(name)`
 - [x] Type-erased storage via `Box<dyn Any>`, panics on type mismatch
 
+## v2.5.0 — Eliminating Cons (DONE)
+
+### Arbitrary Capacity (DONE)
+- [x] Lemire fastmod for non-power-of-two capacities
+- [x] is_pow2 branch for zero regression on power-of-two
+- [x] 15 new tests including exhaustive verification
+
+### Pipeline Wait Strategy (DONE)
+- [x] `then_with()`, `then_a_with()`, `then_b_with()` APIs
+- [x] Backward-compatible (existing APIs delegate with default)
+
+### Derive Macro Hardening (DONE)
+- [x] `#[photon(as_enum)]` attribute for explicit enum marking
+- [x] Compile error for unrecognized field types
+
+### Companion Crates (DONE)
+- [x] `photon-ring-async` — runtime-agnostic async wrappers
+- [x] `photon-ring-metrics` — framework-agnostic observability
+
+### Formal Verification (DONE)
+- [x] Loom model for MPMC cursor protocol (4 scenarios)
+- [ ] Full loom integration with source via cfg(loom) (future)
+- [ ] proptest / cargo-fuzz property-based testing (future)
+
 ## v0.8.0 — Research & Formal Methods (DONE)
 
 ### Platform-Specific Optimizations (DONE)

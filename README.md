@@ -178,16 +178,25 @@ Subscribers are independent and contention-free by default. `Subscribable::subsc
 
 For topic routing, `Photon<T>` provides a string-keyed bus where all topics share the same payload type, and `TypedBus` allows a different `T: Pod` per topic. Both lazily create topics and expose `publisher`, `try_publisher`, `subscribe`, and `subscribable`. `publisher()` will panic if the publisher for that topic was already taken, and `TypedBus` also panics on type mismatches for an existing topic.
 
-Pipelines build dedicated-thread processing graphs on supported OS targets. `topology::Pipeline::builder().capacity(...).input::<T>()` returns an input publisher plus a typed builder; `.then(...)` chains stages, `.fan_out(...)` creates a diamond, `.then_a(...)` and `.then_b(...)` extend either branch, and `.build()` returns the final subscriber plus a `Pipeline` handle. The handle supports `shutdown`, `join`, `panicked_stages`, `is_healthy`, and `stage_count`. For manual shutdown outside topology, use `Shutdown`.
+Pipelines build dedicated-thread processing graphs on supported OS targets. `topology::Pipeline::builder().capacity(...).input::<T>()` returns an input publisher plus a typed builder; `.then(...)` chains stages, `.fan_out(...)` creates a diamond, `.then_a(...)` and `.then_b(...)` extend either branch, and `.build()` returns the final subscriber plus a `Pipeline` handle. `then_with(f, WaitStrategy)` (and `then_a_with`, `then_b_with`) lets you configure the wait strategy for each pipeline stage. The handle supports `shutdown`, `join`, `panicked_stages`, `is_healthy`, and `stage_count`. For manual shutdown outside topology, use `Shutdown`.
+
+The `#[derive(photon_ring::DeriveMessage)]` macro supports a `#[photon(as_enum)]` attribute for fields whose types are `#[repr(u8)]` enums. Unrecognized types without this attribute now produce a compile error instead of being silently assumed to be enums.
+
+Ring capacity accepts any integer >= 2. Power-of-two capacities use bitwise `seq & mask` for zero-overhead indexing; arbitrary capacities use Lemire reciprocal-multiply fastmod (~1.5 ns).
 
 Wait behavior is explicit. `recv_with` accepts `WaitStrategy::BusySpin`, `YieldSpin`, `BackoffSpin`, `Adaptive`, `MonitorWait`, or `MonitorWaitFallback` depending on whether you want the absolute lowest wakeup latency or better core sharing. `MonitorWait` uses Intel UMONITOR/UMWAIT (Alder Lake+) for near-zero power wakeup (~30 ns), with automatic fallback to PAUSE on older x86 or WFE on ARM; construct it safely via `WaitStrategy::monitor_wait(&stamp)`. `MonitorWaitFallback` uses TPAUSE without requiring an address. On supported platforms, the crate also includes `affinity` helpers for CPU pinning; with the `hugepages` feature on Linux, you can use `Publisher::mlock`, `Publisher::prefault`, and `mem::{set_numa_preferred, reset_numa_policy}` to reduce page-fault and NUMA noise.
+
+### Companion crates
+
+- **[`photon-ring-async`](photon-ring-async/)** — Runtime-agnostic async wrappers. `AsyncSubscriber` and `AsyncSubscriberGroup` with yield-based polling and configurable spin budget. Works with tokio, smol, embassy, or any executor.
+- **[`photon-ring-metrics`](photon-ring-metrics/)** — Observability wrappers with `SubscriberMetrics` (snapshot/delta tracking) and `PublisherMetrics`. Framework-agnostic — bring your own prometheus/opentelemetry.
 
 ## Design constraints
 
 | Constraint | Rationale |
 |---|---|
 | `T: Pod` | Every bit pattern must be valid, which makes optimistic torn reads safe to reject. |
-| Power-of-two capacity | Indexing uses `seq & mask` instead of `%`. |
+| Capacity >= 2 | Any capacity works. Power-of-two uses `seq & mask`; arbitrary capacity uses Lemire fastmod (~1.5 ns, zero-division). |
 | Single producer by default | The fastest path relies on `&mut self` rather than write-side atomics. |
 | Lossy overflow by default | The publisher never blocks; subscribers detect drops through `Lagged`. |
 | 64-bit atomics required | The core algorithm depends on `AtomicU64`. |
@@ -256,6 +265,7 @@ cargo test
 cargo bench
 cargo bench --bench payload_scaling
 cargo +nightly miri test --test correctness -- --test-threads=1
+cargo test --test loom_mpmc --release  # Loom exhaustive MPMC concurrency tests
 cargo run --release --example market_data
 cargo run --release --example pipeline
 cargo run --release --example backpressure
