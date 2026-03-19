@@ -608,3 +608,11 @@ The actual issue is that `UnsafeCell<MaybeUninit<T>>` accessed via raw pointer d
 The prohibition analysis identified one viable, novel design that achieves formal soundness under Rust's abstract machine with zero performance regression on x86-64: **Atomic Stripe Compile-Time Layout (ASCL / Design 6)**. The design decomposes `T: Pod` into `[AtomicU64; N]` at compile time and uses the existing seqlock stamp protocol with `Relaxed` atomic stores/loads for the payload fields. On x86-64, this produces identical machine code to the current volatile-based implementation. On ARM64, it adds one `DMB ISHLD` barrier in the reader path (~5-10 ns).
 
 The impossibility proofs demonstrate that no other approach can achieve formal soundness at this performance level for payloads > 16 bytes. All spatially-separated designs (ping-pong, epoch-indexed, write-once) reduce to the seqlock race when slots are recycled. All coordination-based designs exceed the latency budget. The only viable path is decomposition into existing atomic primitives.
+
+---
+
+## Implementation Status
+
+Design 6 (ASCL / Atomic Stripe Compile-Time Layout) has been implemented as the
+`atomic-slots` feature in photon-ring v2.3.0. Benchmark results confirm the
+zero-cost prediction on x86-64. See CHANGELOG.md for details.

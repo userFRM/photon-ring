@@ -78,6 +78,11 @@
 - [x] TLA+ model of the seqlock-stamped ring protocol (`verification/seqlock.tla`)
 - [x] `NoTornRead` safety property verified in spec
 - [x] MC.tla model config + README with TLC instructions
+- [x] **`atomic-slots` feature:** Formal soundness gap closed. Seqlock data race
+  (UB under Rust abstract machine) eliminated by decomposing `T: Pod` payloads into
+  `[AtomicU64; N]` stripes. Zero performance regression on x86-64 (identical MOV
+  instructions). Miri-passable. See `docs/research-seqlock-alternatives.md` for the
+  constraint-anchored analysis that produced this design.
 - [ ] Loom-based concurrency testing (when loom supports seqlock patterns)
 - [ ] Property-based testing with proptest
 

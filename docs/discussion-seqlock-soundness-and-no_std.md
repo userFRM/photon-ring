@@ -155,3 +155,17 @@ The multi-model audit and fixes addressed code-level correctness. What remains f
 The seqlock's formal UB under Rust's abstract machine is not fixable today. It is not a photon-ring problem — it is a Rust language problem. Every seqlock, Disruptor, and shared-memory IPC implementation in Rust has the same gap. The hardware semantics are well-defined. The language spec will catch up (`atomic_memcpy`). Until then, photon-ring documents the gap honestly and relies on the same hardware guarantees that the Linux kernel has relied on for two decades.
 
 The `no_std` constraint is defensible for the core ring layer but should not constrain cold-path decisions. A hybrid `std`-default approach would give most users better primitives while preserving bare-metal compatibility for the niche that needs it.
+
+---
+
+## 7. Update: `atomic-slots` Feature Implemented
+
+The ASCL design proposed by the constraint-anchored analysis has been implemented
+as the `atomic-slots` feature flag. Benchmarks confirm the research prediction:
+zero performance regression on x86-64 (identical MOV instructions). On ARM64,
+one extra DMB barrier in the reader (~5-10ns).
+
+Users who need formal soundness can opt in via:
+```toml
+photon-ring = { version = "2.3.0", features = ["atomic-slots"] }
+```

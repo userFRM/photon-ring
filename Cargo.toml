@@ -3,9 +3,9 @@ name = "photon-ring"
 version = "2.3.0"
 edition = "2021"
 rust-version = "1.94"
-description = "Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers. no_std compatible."
+description = "Ultra-low-latency SPMC/MPMC pub/sub using stamped ring buffers. Formally sound with atomic-slots feature. no_std compatible."
 license = "Apache-2.0"
-keywords = ["pubsub", "spmc", "seqlock", "no_std", "zero-alloc"]
+keywords = ["pubsub", "spmc", "lock-free", "no_std", "zero-alloc"]
 categories = ["concurrency", "no-std"]
 readme = "README.md"
 repository = "https://github.com/userFRM/photon-ring"
@@ -16,6 +16,7 @@ exclude = [".github/"]
 [features]
 hugepages = ["dep:libc"]
 derive = ["dep:photon-ring-derive"]
+atomic-slots = []
 
 [dependencies]
 hashbrown = "0.16.1"
@@ -28,7 +29,7 @@ core_affinity2 = "0.15.4"
 
 [dev-dependencies]
 criterion = "0.8.2"
-crossbeam-channel = "0.5"
+crossbeam-channel = "0.5.15"
 disruptor = "4.0.0"
 libc = "0.2.183"
 
@@ -64,6 +65,7 @@ name = "prefetchw_crosscore"
 harness = false
 
 [package.metadata.docs.rs]
+# Enables all features (derive, hugepages, atomic-slots) in docs.rs builds.
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 targets = ["x86_64-unknown-linux-gnu"]
