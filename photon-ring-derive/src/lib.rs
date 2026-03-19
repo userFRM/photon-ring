@@ -26,7 +26,8 @@
 //! struct Order {
 //!     price: f64,
 //!     qty: u32,
-//!     side: Side,        // any #[repr(u8)] enum
+//!     #[photon(as_enum)]
+//!     side: Side,        // any #[repr(u8)] enum — requires #[photon(as_enum)]
 //!     filled: bool,
 //!     tag: Option<u32>,
 //! }
@@ -165,8 +166,10 @@ enum FieldKind {
     OptionF32,
     /// `Option<f64>` — wire struct gets `X_value: u64` (bit-encoded) and `X_has: u8`.
     OptionF64,
-    /// Any other type — assumed to be a `#[repr(u8)]` enum → `u8`.
+    /// A `#[repr(u8)]` enum, explicitly marked with `#[photon(as_enum)]` → `u8`.
     Enum,
+    /// Unrecognized type — will emit a compile error.
+    Unsupported,
     /// Unsupported `Option<T>` inner type — will emit a compile error.
     UnsupportedOption(String),
 }
@@ -190,7 +193,7 @@ fn classify(ty: &Type) -> FieldKind {
         Type::Path(p) => {
             let seg = match p.path.segments.last() {
                 Some(s) => s,
-                None => return FieldKind::Enum,
+                None => return FieldKind::Unsupported,
             };
             let id = seg.ident.to_string();
 
@@ -229,12 +232,12 @@ fn classify(ty: &Type) -> FieldKind {
                     FieldKind::UnsupportedOption(String::new())
                 }
 
-                // Anything else — assume enum
-                _ => FieldKind::Enum,
+                // Anything else — unrecognized, require explicit attribute
+                _ => FieldKind::Unsupported,
             }
         }
 
-        _ => FieldKind::Enum,
+        _ => FieldKind::Unsupported,
     }
 }
 
@@ -268,9 +271,14 @@ fn classify(ty: &Type) -> FieldKind {
 /// | `Option<f32>` | `X_value: u32, X_has: u8` | `Some(v) => (v.to_bits(), 1), None => (0, 0)` | `has != 0 => Some(f32::from_bits(value)), else None` |
 /// | `Option<f64>` | `X_value: u64, X_has: u8` | `Some(v) => (v.to_bits(), 1), None => (0, 0)` | `has != 0 => Some(f64::from_bits(value)), else None` |
 /// | `[T; N]` (T: Pod) | same | passthrough | passthrough |
-/// | Any other type | `u8` | `v as u8` | `transmute(v)` (unsafe) |
+/// | `#[photon(as_enum)] field: E` | `u8` | `v as u8` | `transmute(v)` (unsafe) |
 ///
-/// # Enum safety
+/// # Enum fields
+///
+/// Enum fields **must** be annotated with `#[photon(as_enum)]` to opt in
+/// to the `u8` wire encoding. Without this attribute, unrecognized types
+/// produce a compile error. The enum must have `#[repr(u8)]` — the macro
+/// emits a compile-time `size_of` check to enforce this.
 ///
 /// Enum fields are stored as raw `u8` on the wire. Converting back requires
 /// that the byte holds a valid discriminant. Because the macro cannot verify
@@ -279,9 +287,6 @@ fn classify(ty: &Type) -> FieldKind {
 /// instead of a safe `From` impl. Callers must ensure enum fields contain
 /// valid discriminants (which is always the case when the wire data was
 /// produced by a valid domain value via `From<Domain> for Wire`).
-///
-/// The enum **must** have `#[repr(u8)]` — the macro emits a compile-time
-/// `size_of` check to enforce this.
 ///
 /// # Example
 ///
@@ -294,6 +299,7 @@ fn classify(ty: &Type) -> FieldKind {
 /// struct Order {
 ///     price: f64,
 ///     qty: u32,
+///     #[photon(as_enum)]
 ///     side: Side,
 ///     filled: bool,
 ///     tag: Option<u32>,
@@ -301,7 +307,7 @@ fn classify(ty: &Type) -> FieldKind {
 /// // Generates: OrderWire, From<Order> for OrderWire,
 /// //            OrderWire::into_domain (unsafe, due to enum field)
 /// ```
-#[proc_macro_derive(Message)]
+#[proc_macro_derive(Message, attributes(photon))]
 pub fn derive_message(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -340,7 +346,22 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
     for field in &fields {
         let fname = field.ident.as_ref().unwrap();
         let fty = &field.ty;
-        let kind = classify(fty);
+
+        // Check for #[photon(as_enum)] attribute
+        let is_explicit_enum = field.attrs.iter().any(|attr| {
+            if attr.path().is_ident("photon") {
+                if let Ok(meta) = attr.parse_args::<syn::Ident>() {
+                    return meta == "as_enum";
+                }
+            }
+            false
+        });
+
+        let kind = if is_explicit_enum {
+            FieldKind::Enum
+        } else {
+            classify(fty)
+        };
 
         match kind {
             FieldKind::Passthrough => {
@@ -594,6 +615,14 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
                         );
                     };
                 });
+            }
+            FieldKind::Unsupported => {
+                let msg = format!(
+                    "Unsupported field type `{}`. Use #[photon(as_enum)] for #[repr(u8)] enum fields, \
+                     or convert to a numeric type manually.",
+                    quote!(#fty),
+                );
+                return syn::Error::new_spanned(fty, msg).to_compile_error().into();
             }
             FieldKind::UnsupportedOption(inner_name) => {
                 let msg = format!(

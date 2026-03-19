@@ -20,8 +20,14 @@ pub struct Publisher<T: Pod> {
     /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
     /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
     pub(super) slots_ptr: *const Slot<T>,
-    /// Cached ring mask (`capacity - 1`). Immutable after construction.
+    /// Cached ring capacity. Immutable after construction.
+    pub(super) capacity: u64,
+    /// Cached ring mask (`capacity - 1`). Used for pow2 fast path.
     pub(super) mask: u64,
+    /// Precomputed Lemire reciprocal for arbitrary-capacity fastmod.
+    pub(super) reciprocal: u64,
+    /// True if capacity is a power of two (AND instead of fastmod).
+    pub(super) is_pow2: bool,
     /// Cached raw pointer to `ring.cursor.0`. Avoids Arc deref on hot path.
     pub(super) cursor_ptr: *const AtomicU64,
     pub(super) seq: u64,
@@ -36,6 +42,24 @@ pub struct Publisher<T: Pod> {
 unsafe impl<T: Pod> Send for Publisher<T> {}
 
 impl<T: Pod> Publisher<T> {
+    /// Map a sequence number to a slot index.
+    ///
+    /// Power-of-two: bitwise AND (~0.3 ns). Arbitrary: reciprocal multiply (~1.5 ns).
+    /// The branch is perfectly predicted (always the same direction after warmup).
+    #[inline(always)]
+    fn slot_index(&self, seq: u64) -> usize {
+        if self.is_pow2 {
+            (seq & self.mask) as usize
+        } else {
+            let q = ((seq as u128 * self.reciprocal as u128) >> 64) as u64;
+            let mut r = seq - q.wrapping_mul(self.capacity);
+            if r >= self.capacity {
+                r -= self.capacity;
+            }
+            r as usize
+        }
+    }
+
     /// Spin-wait until backpressure allows publishing.
     ///
     /// On a bounded channel, this blocks until the slowest subscriber has
@@ -75,9 +99,9 @@ impl<T: Pod> Publisher<T> {
     #[inline]
     fn publish_unchecked(&mut self, value: T) {
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
-        // Index is masked to stay within the allocated slot array.
-        let slot = unsafe { &*self.slots_ptr.add((self.seq & self.mask) as usize) };
-        prefetch_write_next(self.slots_ptr, (self.seq + 1) & self.mask);
+        // Index is computed via slot_index to stay within the allocated slot array.
+        let slot = unsafe { &*self.slots_ptr.add(self.slot_index(self.seq)) };
+        prefetch_write_next(self.slots_ptr, self.slot_index(self.seq + 1) as u64);
         slot.write(self.seq, value);
         // SAFETY: cursor_ptr points to ring.cursor.0, kept alive by self.ring.
         unsafe { &*self.cursor_ptr }.store(self.seq, Ordering::Release);
@@ -107,8 +131,8 @@ impl<T: Pod> Publisher<T> {
     pub fn publish_with(&mut self, f: impl FnOnce(&mut core::mem::MaybeUninit<T>)) {
         self.wait_for_backpressure();
         // SAFETY: see publish_unchecked.
-        let slot = unsafe { &*self.slots_ptr.add((self.seq & self.mask) as usize) };
-        prefetch_write_next(self.slots_ptr, (self.seq + 1) & self.mask);
+        let slot = unsafe { &*self.slots_ptr.add(self.slot_index(self.seq)) };
+        prefetch_write_next(self.slots_ptr, self.slot_index(self.seq + 1) as u64);
         slot.write_with(self.seq, f);
         unsafe { &*self.cursor_ptr }.store(self.seq, Ordering::Release);
         self.seq += 1;
@@ -221,7 +245,7 @@ impl<T: Pod> Publisher<T> {
         self.seq
     }
 
-    /// Ring capacity (power of two).
+    /// Ring capacity.
     #[inline]
     pub fn capacity(&self) -> u64 {
         self.ring.capacity()

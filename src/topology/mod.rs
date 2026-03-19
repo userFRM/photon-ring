@@ -75,6 +75,7 @@ pub use pipeline::Pipeline;
 
 use crate::channel::{Publisher, Subscriber};
 use crate::pod::Pod;
+use crate::wait::WaitStrategy;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -119,11 +120,17 @@ impl SharedState {
 /// Spawn a stage thread that reads from `input`, applies `f`, and
 /// publishes to `output`. Returns the `Arc<AtomicU8>` status handle
 /// and the `JoinHandle`.
+///
+/// The `strategy` parameter controls how the stage waits when no
+/// message is available. Use [`WaitStrategy::default()`] for general
+/// purpose adaptive waiting, or a specific strategy for tuned latency /
+/// CPU trade-offs.
 fn spawn_stage<T, U>(
     mut input: Subscriber<T>,
     mut output: Publisher<U>,
     shutdown: Arc<AtomicBool>,
     f: impl Fn(T) -> U + Send + 'static,
+    strategy: WaitStrategy,
 ) -> (Arc<AtomicU8>, JoinHandle<()>)
 where
     T: Pod,
@@ -134,6 +141,7 @@ where
 
     let handle = thread::spawn(move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut iter: u32 = 0;
             loop {
                 if shutdown.load(Ordering::Acquire) {
                     return;
@@ -142,13 +150,15 @@ where
                     Ok(value) => {
                         let out = f(value);
                         output.publish(out);
+                        iter = 0;
                     }
                     Err(crate::channel::TryRecvError::Empty) => {
-                        core::hint::spin_loop();
+                        strategy.wait(iter);
+                        iter = iter.saturating_add(1);
                     }
                     Err(crate::channel::TryRecvError::Lagged { .. }) => {
                         // Cursor was advanced by try_recv, retry immediately.
-                        core::hint::spin_loop();
+                        iter = 0;
                     }
                 }
             }
@@ -169,6 +179,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wait::WaitStrategy;
 
     #[test]
     fn single_stage_pipeline() {
@@ -464,6 +475,74 @@ mod tests {
         assert_eq!(output.recv(), 42);
 
         assert_eq!(pipeline.stage_count(), 0);
+
+        pipeline.shutdown();
+        pipeline.join();
+    }
+
+    #[test]
+    fn pipeline_with_wait_strategy() {
+        let (mut pub_, stages) = Pipeline::builder().capacity(64).input::<u64>();
+
+        let (mut output, pipeline) = stages
+            .then_with(|x: u64| x * 2, WaitStrategy::YieldSpin)
+            .then_with(|x: u64| x + 1, WaitStrategy::BackoffSpin)
+            .build();
+
+        pub_.publish(10);
+        assert_eq!(output.recv(), 21);
+
+        pipeline.shutdown();
+        pipeline.join();
+    }
+
+    #[test]
+    fn pipeline_mixed_then_and_then_with() {
+        let (mut pub_, stages) = Pipeline::builder().capacity(64).input::<u64>();
+
+        let (mut output, pipeline) = stages
+            .then(|x: u64| x + 10)
+            .then_with(|x: u64| x * 2, WaitStrategy::BusySpin)
+            .then(|x: u64| x - 5)
+            .build();
+
+        pub_.publish(5);
+        // (5 + 10) * 2 - 5 = 25
+        assert_eq!(output.recv(), 25);
+
+        pipeline.shutdown();
+        pipeline.join();
+    }
+
+    #[test]
+    fn fan_out_then_a_with_strategy() {
+        let (mut pub_, stages) = Pipeline::builder().capacity(64).input::<u64>();
+
+        let ((mut out_a, mut out_b), pipeline) = stages
+            .fan_out(|x: u64| x * 2, |x: u64| x + 100)
+            .then_a_with(|x: u64| x + 1, WaitStrategy::YieldSpin)
+            .build();
+
+        pub_.publish(5);
+        assert_eq!(out_a.recv(), 11); // 5 * 2 + 1
+        assert_eq!(out_b.recv(), 105); // 5 + 100
+
+        pipeline.shutdown();
+        pipeline.join();
+    }
+
+    #[test]
+    fn fan_out_then_b_with_strategy() {
+        let (mut pub_, stages) = Pipeline::builder().capacity(64).input::<u64>();
+
+        let ((mut out_a, mut out_b), pipeline) = stages
+            .fan_out(|x: u64| x * 2, |x: u64| x + 100)
+            .then_b_with(|x: u64| x * 3, WaitStrategy::BackoffSpin)
+            .build();
+
+        pub_.publish(5);
+        assert_eq!(out_a.recv(), 10); // 5 * 2
+        assert_eq!(out_b.recv(), 315); // (5 + 100) * 3
 
         pipeline.shutdown();
         pipeline.join();

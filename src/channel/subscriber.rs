@@ -18,8 +18,14 @@ pub struct Subscriber<T: Pod> {
     /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
     /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
     pub(super) slots_ptr: *const Slot<T>,
-    /// Cached ring mask (`capacity - 1`). Immutable after construction.
+    /// Cached ring capacity. Immutable after construction.
+    pub(super) capacity: u64,
+    /// Cached ring mask (`capacity - 1`). Used for pow2 fast path.
     pub(super) mask: u64,
+    /// Precomputed Lemire reciprocal for arbitrary-capacity fastmod.
+    pub(super) reciprocal: u64,
+    /// True if capacity is a power of two (AND instead of fastmod).
+    pub(super) is_pow2: bool,
     pub(super) cursor: u64,
     /// Per-subscriber cursor tracker for backpressure. `None` on regular
     /// (lossy) channels — zero overhead.
@@ -33,6 +39,21 @@ pub struct Subscriber<T: Pod> {
 unsafe impl<T: Pod> Send for Subscriber<T> {}
 
 impl<T: Pod> Subscriber<T> {
+    /// Map a sequence number to a slot index.
+    #[inline(always)]
+    fn slot_index(&self, seq: u64) -> usize {
+        if self.is_pow2 {
+            (seq & self.mask) as usize
+        } else {
+            let q = ((seq as u128 * self.reciprocal as u128) >> 64) as u64;
+            let mut r = seq - q.wrapping_mul(self.capacity);
+            if r >= self.capacity {
+                r -= self.capacity;
+            }
+            r as usize
+        }
+    }
+
     /// Try to receive the next message without blocking.
     #[inline]
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
@@ -49,7 +70,7 @@ impl<T: Pod> Subscriber<T> {
     #[inline]
     pub fn recv(&mut self) -> T {
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
-        let slot = unsafe { &*self.slots_ptr.add((self.cursor & self.mask) as usize) };
+        let slot = unsafe { &*self.slots_ptr.add(self.slot_index(self.cursor)) };
         let expected = self.cursor * 2 + 2;
         // Phase 1: bare spin — no PAUSE, minimum wakeup latency
         for _ in 0..64 {
@@ -134,7 +155,7 @@ impl<T: Pod> Subscriber<T> {
     /// ```
     #[inline]
     pub fn recv_with(&mut self, strategy: WaitStrategy) -> T {
-        let slot = unsafe { &*self.slots_ptr.add((self.cursor & self.mask) as usize) };
+        let slot = unsafe { &*self.slots_ptr.add(self.slot_index(self.cursor)) };
         let expected = self.cursor * 2 + 2;
         let mut iter: u32 = 0;
         loop {
@@ -370,7 +391,7 @@ impl<T: Pod> Subscriber<T> {
     #[inline]
     fn read_slot(&mut self) -> Result<T, TryRecvError> {
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
-        let slot = unsafe { &*self.slots_ptr.add((self.cursor & self.mask) as usize) };
+        let slot = unsafe { &*self.slots_ptr.add(self.slot_index(self.cursor)) };
         let expected = self.cursor * 2 + 2;
 
         match slot.try_read(self.cursor) {

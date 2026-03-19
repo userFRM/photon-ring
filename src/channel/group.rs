@@ -26,8 +26,14 @@ pub struct SubscriberGroup<T: Pod, const N: usize> {
     /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
     /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
     pub(super) slots_ptr: *const Slot<T>,
-    /// Cached ring mask (`capacity - 1`). Immutable after construction.
+    /// Cached ring capacity. Immutable after construction.
+    pub(super) capacity: u64,
+    /// Cached ring mask (`capacity - 1`). Used for pow2 fast path.
     pub(super) mask: u64,
+    /// Precomputed Lemire reciprocal for arbitrary-capacity fastmod.
+    pub(super) reciprocal: u64,
+    /// True if capacity is a power of two (AND instead of fastmod).
+    pub(super) is_pow2: bool,
     /// Single cursor shared by all `N` logical subscribers.
     pub(super) cursor: u64,
     /// Cumulative messages skipped due to lag.
@@ -42,6 +48,21 @@ pub struct SubscriberGroup<T: Pod, const N: usize> {
 unsafe impl<T: Pod, const N: usize> Send for SubscriberGroup<T, N> {}
 
 impl<T: Pod, const N: usize> SubscriberGroup<T, N> {
+    /// Map a sequence number to a slot index.
+    #[inline(always)]
+    fn slot_index(&self, seq: u64) -> usize {
+        if self.is_pow2 {
+            (seq & self.mask) as usize
+        } else {
+            let q = ((seq as u128 * self.reciprocal as u128) >> 64) as u64;
+            let mut r = seq - q.wrapping_mul(self.capacity);
+            if r >= self.capacity {
+                r -= self.capacity;
+            }
+            r as usize
+        }
+    }
+
     /// Try to receive the next message for the group.
     ///
     /// Performs a single seqlock read and one cursor increment — no
@@ -50,7 +71,7 @@ impl<T: Pod, const N: usize> SubscriberGroup<T, N> {
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
         let cur = self.cursor;
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
-        let slot = unsafe { &*self.slots_ptr.add((cur & self.mask) as usize) };
+        let slot = unsafe { &*self.slots_ptr.add(self.slot_index(cur)) };
         let expected = cur * 2 + 2;
 
         match slot.try_read(cur) {
@@ -128,7 +149,7 @@ impl<T: Pod, const N: usize> SubscriberGroup<T, N> {
     #[inline]
     pub fn recv_with(&mut self, strategy: WaitStrategy) -> T {
         let cur = self.cursor;
-        let slot = unsafe { &*self.slots_ptr.add((cur & self.mask) as usize) };
+        let slot = unsafe { &*self.slots_ptr.add(self.slot_index(cur)) };
         let expected = cur * 2 + 2;
         let mut iter: u32 = 0;
         loop {

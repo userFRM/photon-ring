@@ -22,6 +22,7 @@ enum Side {
 struct Order {
     price: f64,
     qty: u32,
+    #[photon(as_enum)]
     side: Side,
     filled: bool,
     tag: Option<u32>,
