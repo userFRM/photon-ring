@@ -1,6 +1,6 @@
 [package]
 name = "photon-ring-metrics"
-version = "2.4.0"
+version = "2.5.0"
 edition = "2021"
 rust-version = "1.94"
 description = "Metrics and observability wrappers for photon-ring pub/sub channels"
@@ -8,4 +8,4 @@ license = "Apache-2.0"
 repository = "https://github.com/userFRM/photon-ring"
 
 [dependencies]
-photon-ring = { version = "2.4.0", path = ".." }
+photon-ring = { version = "2.5.0", path = ".." }

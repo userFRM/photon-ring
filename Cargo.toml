@@ -3,7 +3,7 @@ members = [".", "photon-ring-derive", "photon-ring-async", "photon-ring-metrics"
 
 [package]
 name = "photon-ring"
-version = "2.4.0"
+version = "2.5.0"
 edition = "2021"
 rust-version = "1.94"
 description = "Ultra-low-latency SPMC/MPMC pub/sub using stamped ring buffers. Formally sound with atomic-slots feature. no_std compatible."
@@ -28,7 +28,7 @@ atomic-slots = []
 hashbrown = "0.16.1"
 spin = "0.10.0"
 libc = { version = "0.2.183", default-features = false, optional = true }
-photon-ring-derive = { version = "2.4.0", path = "photon-ring-derive", optional = true }
+photon-ring-derive = { version = "2.5.0", path = "photon-ring-derive", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "freebsd", target_os = "netbsd", target_os = "android"))'.dependencies]
 core_affinity2 = "0.15.4"
