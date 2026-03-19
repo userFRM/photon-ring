@@ -147,7 +147,8 @@ where
                         core::hint::spin_loop();
                     }
                     Err(crate::channel::TryRecvError::Lagged { .. }) => {
-                        // Upstream overrun — skip ahead.
+                        // Cursor was advanced by try_recv, retry immediately.
+                        core::hint::spin_loop();
                     }
                 }
             }

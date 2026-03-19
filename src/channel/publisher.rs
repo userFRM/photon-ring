@@ -251,6 +251,10 @@ impl<T: Pod> Publisher<T> {
     /// which can corrupt slot data and seqlock stamps.
     #[cfg(all(target_os = "linux", feature = "hugepages"))]
     pub unsafe fn prefault(&self) {
+        assert!(
+            self.seq == 0,
+            "prefault() must be called before any publish operations"
+        );
         let ptr = self.ring.slots_ptr() as *mut u8;
         let len = self.ring.slots_byte_len();
         crate::mem::prefault_pages(ptr, len)

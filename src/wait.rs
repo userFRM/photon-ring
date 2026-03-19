@@ -83,9 +83,10 @@ pub enum WaitStrategy {
     ///
     /// # Safety (of direct construction)
     ///
-    /// Constructing this variant directly with an arbitrary pointer can
-    /// cause hardware faults on WAITPKG-capable CPUs. Prefer the safe
-    /// constructor [`WaitStrategy::monitor_wait`].
+    /// The pointer must remain valid for the duration of the wait.
+    /// Constructing this variant directly with a pointer to stack memory
+    /// or memory that may be deallocated is undefined behavior. Always
+    /// prefer the safe constructor [`WaitStrategy::monitor_wait()`].
     MonitorWait {
         /// Pointer to the memory location to monitor. Must remain valid
         /// for the duration of the wait.
@@ -180,6 +181,10 @@ fn waitpkg_supported() -> bool {
 mod umwait {
     /// Read the TSC and return a deadline ~100µs in the future.
     /// On a 3 GHz CPU, 100µs ≈ 300,000 cycles.
+    ///
+    /// Note: The 300,000 cycle offset assumes ~3 GHz TSC frequency. On slower
+    /// CPUs (1 GHz), this becomes ~300 µs; on faster CPUs (5 GHz), ~60 µs.
+    /// The deadline is a safety bound, not a precision target.
     #[inline(always)]
     fn deadline_100us() -> (u32, u32) {
         // Use _rdtsc() directly. The previous version had a dead inline-asm
