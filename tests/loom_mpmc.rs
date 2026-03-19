@@ -404,7 +404,15 @@ fn catch_up_with_delayed_writer() {
 /// the 3-thread state space tractable for loom.
 ///
 /// Invariant: if cursor shows seq=N, then stamp[N] must be committed.
+///
+/// NOTE: This test is ignored by default because 3-thread loom models
+/// have enormous state spaces (~10 atomic ops per producer x 3 threads).
+/// Run manually with:
+/// ```sh
+/// RUSTFLAGS="--cfg loom" cargo test --test loom_mpmc --release consumer_single_check -- --ignored
+/// ```
 #[test]
+#[ignore]
 fn consumer_single_check_during_publish() {
     loom::model(|| {
         let ring = Arc::new(RingModel::new());

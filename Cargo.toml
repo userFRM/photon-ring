@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "photon-ring-derive", "photon-ring-async", "photon-ring-metrics"]
+
 [package]
 name = "photon-ring"
 version = "2.4.0"

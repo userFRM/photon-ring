@@ -66,40 +66,6 @@ impl RingIndex {
             is_pow2,
         }
     }
-
-    /// Map a sequence number to a slot index.
-    ///
-    /// Sub-1 ns for power-of-two (bitwise AND), ~1.5 ns for arbitrary
-    /// capacity (Lemire fastmod -- two `MUL` instructions, no division).
-    ///
-    /// Note: hot-path structs (Publisher, Subscriber, etc.) inline their
-    /// own copy of this logic to avoid the indirection through RingIndex.
-    /// This method is the canonical reference, used by tests.
-    #[cfg(test)]
-    #[inline(always)]
-    pub(crate) fn slot(&self, seq: u64) -> usize {
-        if self.is_pow2 {
-            (seq & self.mask) as usize
-        } else {
-            self.fastmod(seq) as usize
-        }
-    }
-
-    /// Fast modulo: compute `n % capacity` without division.
-    ///
-    /// Algorithm: approximate quotient via `q = mulhi(n, M)`, then
-    /// `r = n - q * d`, with a single conditional correction for the
-    /// off-by-one case. Correct for all `n` in `[0, u64::MAX]`.
-    #[cfg(test)]
-    #[inline(always)]
-    fn fastmod(&self, n: u64) -> u64 {
-        let q = ((n as u128 * self.reciprocal as u128) >> 64) as u64;
-        let mut r = n - q.wrapping_mul(self.capacity);
-        if r >= self.capacity {
-            r -= self.capacity;
-        }
-        r
-    }
 }
 
 /// Backpressure state attached to a [`SharedRing`] when created via

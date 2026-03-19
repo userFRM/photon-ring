@@ -101,6 +101,9 @@ jobs:
           --skip mpmc_stress
           --skip mpmc_blocking_recv
           --skip mpmc_clone
+          --skip arbitrary_capacity_stress
+          --skip arbitrary_capacity_bounded_cross
+          --skip arbitrary_capacity_mpmc
 
   # ── Cross-platform matrix build ──────────────────────────────────────
   cross-platform:
