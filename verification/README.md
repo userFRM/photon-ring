@@ -128,6 +128,9 @@ values of all variables.
 
 ## Limitations
 
+- The TLA+ specification models the SPMC (single-producer) protocol only. The MPMC cursor advancement protocol (CAS-based sequence claiming, predecessor stamp polling, catch-up scanning) is NOT formally verified.
+- The MPMC deadlock fix in v2.1.0 (stamp equality `!=` → `<`) is the kind of bug formal verification would have caught. Consider extending the spec or using `loom` for exhaustive MPMC testing.
+
 ### SPMC only -- MPMC is not modeled
 
 The TLA+ specification covers the single-producer, multi-consumer (SPMC)

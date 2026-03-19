@@ -56,6 +56,16 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  # ── MSRV verification ─────────────────────────────────────────────
+  msrv:
+    name: MSRV 1.94
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check
+
   # ── Miri (undefined-behavior detector) ────────────────────────────────
   miri:
     name: miri
@@ -141,4 +151,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - run: cargo publish -p photon-ring-derive --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}

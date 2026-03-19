@@ -188,6 +188,7 @@ Wait behavior is explicit. `recv_with` accepts `WaitStrategy::BusySpin`, `YieldS
 | Single producer by default | The fastest path relies on `&mut self` rather than write-side atomics. |
 | Lossy overflow by default | The publisher never blocks; subscribers detect drops through `Lagged`. |
 | 64-bit atomics required | The core algorithm depends on `AtomicU64`. |
+| 64-bit sequence numbers | Stamp encoding `seq * 2 + 2` overflows at `u64::MAX / 2` (~9.2 × 10^18 messages). At 1 billion msg/s this would take ~292 years. |
 
 ## Platform support
 
