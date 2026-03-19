@@ -3,7 +3,7 @@
 
 //! # Photon Ring
 //!
-//! Ultra-low-latency SPMC pub/sub using seqlock-stamped ring buffers.
+//! Ultra-low-latency SPMC/MPMC pub/sub using stamped ring buffers.
 //!
 //! `no_std` compatible (requires `alloc`). The [`topology`] module uses
 //! OS threads and is available on Linux, macOS, Windows, and other
@@ -18,6 +18,8 @@
 //! - **Per-consumer cursor** — zero contention between subscribers.
 //! - **Single-producer** — no write-side synchronisation; the seqlock invariant
 //!   is upheld by `&mut self` on [`Publisher::publish`].
+//! - **`atomic-slots` feature** — formally sound variant that uses `AtomicU64` stripes
+//!   instead of `write_volatile`. Zero cost on x86-64. See the `atomic-slots` feature flag.
 //!
 //! ## Quick start
 //!

@@ -132,6 +132,23 @@ cargo bench --bench throughput
 cargo bench --bench payload_scaling
 ```
 
+### Comparing `atomic-slots` vs default (volatile) slot implementation
+
+To verify that the `atomic-slots` feature has zero performance regression on
+your hardware, run the throughput benchmark with and without the feature:
+
+```bash
+# Default (volatile-based slots)
+cargo bench --bench throughput
+
+# Atomic-slots (AtomicU64 stripe-based slots)
+cargo bench --bench throughput --features atomic-slots
+```
+
+On x86-64, the two runs should produce identical results (same MOV instructions).
+On ARM64, expect ~5-10ns additional reader latency due to one extra `DMB ISHLD`
+barrier.
+
 Results are written to `target/criterion/` as JSON and HTML reports.
 
 ### One-way latency (RDTSC)

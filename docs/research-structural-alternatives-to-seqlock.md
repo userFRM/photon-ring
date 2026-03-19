@@ -667,3 +667,11 @@ By transitivity: W3 happens-before R2.
 Since W3 (the payload stores) happen-before R2 (the payload loads), R2 must observe at least the values written by W3. If no intervening write exists (confirmed by R3 == R1), R2 observes exactly W3's values.
 
 **The Relaxed ordering on R2 is sufficient** because the happens-before relationship is established by the stamp Acquire/Release pair, not by the payload loads themselves. QED.
+
+---
+
+## Implementation Status
+
+Design 1 (All-Atomic Seqlock) has been implemented as the `atomic-slots` feature.
+The formal happens-before proof in Appendix C is validated by Miri passing all
+multi-threaded tests under atomic-slots.

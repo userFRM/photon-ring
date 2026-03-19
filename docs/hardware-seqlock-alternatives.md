@@ -591,3 +591,10 @@ C++ has the same problem. `std::atomic` maxes out at the largest lock-free atomi
 The Linux kernel "solves" this by defining its own memory model (LKMM) that IS aware of hardware semantics and explicitly allows torn reads of non-atomic memory when gated by a sequence counter. Rust has no equivalent escape hatch.
 
 The `atomic_memcpy` RFC (rust-lang/rfcs#3301) would add `atomic_load_bytes`/`atomic_store_bytes` that perform element-wise atomic operations on a byte range. This would make the existing seqlock pattern formally sound without any code changes. Until it lands, Mechanism #12 (explicit decomposition into atomic fields) is the correct engineering solution.
+
+---
+
+## Implementation Status
+
+Mechanism #12 (Atomic Seqlock) has been implemented as the `atomic-slots` feature.
+Confirmed: zero performance regression on x86-64. See CHANGELOG.md.

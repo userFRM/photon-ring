@@ -144,10 +144,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --features hugepages
 
+  # ── atomic-slots feature gate (formally sound slot implementation) ──
+  atomic-slots:
+    name: atomic-slots feature
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --features atomic-slots
+      - run: cargo test --features atomic-slots
+        timeout-minutes: 5
+
   # ── Publish to crates.io (only on tagged releases) ───────────────────
   publish:
     name: publish
-    needs: [check, test, clippy, fmt, miri, cross-platform, wasm, no-default-features, hugepages]
+    needs: [check, test, clippy, fmt, miri, cross-platform, wasm, no-default-features, hugepages, atomic-slots]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

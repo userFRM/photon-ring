@@ -31,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Pinned Criterion benchmark measuring publish throughput and RDTSCP
   one-way latency across same-core, HT-sibling, and cross-physical-core
   topologies.
+- **`atomic-slots` feature:** Formally sound slot implementation using `AtomicU64`
+  stripes instead of `write_volatile`/`read_volatile`. Eliminates the seqlock data
+  race (formal UB under the Rust abstract machine) by decomposing `T: Pod` payloads
+  into per-u64 atomic stores/loads. On x86-64, `AtomicU64::store/load(Relaxed)`
+  compiles to identical `MOV` instructions — zero performance regression. On ARM64,
+  one extra `DMB ISHLD` barrier in the reader path (~5-10ns). Miri-passable.
+  `no_std` compatible. 8 new tests covering partial stripes, odd-sized payloads,
+  cross-thread stress, MPMC, and bounded backpressure under atomic-slots.
+- **3 research documents** exploring seqlock alternatives via constraint-anchored
+  analysis (prohibition engine + impossibility proofs). All 3 independent agents
+  converged on the same design. See `docs/research-*.md`.
 
 ## [2.3.0] - 2026-03-18
 

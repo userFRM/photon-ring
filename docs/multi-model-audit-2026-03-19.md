@@ -359,3 +359,12 @@ All findings were fixed and Gemini 2.5 Pro re-verified all 3 code chunks:
 **Final CI:** `cargo fmt --check` + `cargo test --workspace --features derive` (all pass) + `cargo clippy --all-features -D warnings` (clean)
 
 **Final status: SHIP IT.**
+
+---
+
+## Post-Audit: `atomic-slots` Feature
+
+The H1 finding (seqlock formal UB) has been resolved via the `atomic-slots`
+feature, which replaces volatile with AtomicU64 stripes. This was discovered
+through constraint-anchored analysis where 3 independent agents converged on
+the same design. See `docs/research-seqlock-alternatives.md`.

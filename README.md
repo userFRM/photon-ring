@@ -10,9 +10,11 @@
 [![no_std](https://img.shields.io/badge/no__std-compatible-brightgreen.svg)](https://docs.rs/photon-ring)
 [![CI](https://github.com/userFRM/photon-ring/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/userFRM/photon-ring/actions/workflows/ci.yml)
 
-**Ultra-low-latency SPMC/MPMC pub/sub using seqlock-stamped ring buffers.**
+**Ultra-low-latency SPMC/MPMC pub/sub using stamped ring buffers.**
 
-Photon Ring is a zero-allocation pub/sub crate for Rust built around pre-allocated ring buffers, per-slot seqlock stamps, and `T: Pod` payloads. It targets the part of concurrent systems where queueing overhead dominates: market data, telemetry fanout, staged pipelines, and other hot-path broadcast workloads where every subscriber should see every message.
+Photon Ring is a zero-allocation pub/sub crate for Rust built around pre-allocated ring buffers, per-slot stamp validation, and `T: Pod` payloads. It targets the part of concurrent systems where queueing overhead dominates: market data, telemetry fanout, staged pipelines, and other hot-path broadcast workloads where every subscriber should see every message.
+
+By default, slots use a volatile-based seqlock for maximum performance. With the `atomic-slots` feature, the same stamp protocol operates over `AtomicU64` stripes — **formally sound under the Rust abstract machine** with zero performance regression on x86-64.
 
 It is `no_std` compatible with `alloc`, supports named-topic buses and typed buses, and includes a pipeline builder for multi-stage thread topologies on supported desktop/server platforms.
 
@@ -55,6 +57,7 @@ Optional features:
 
 - `derive`: enables `#[derive(photon_ring::DerivePod)]` for user-defined `Pod` types.
 - `hugepages`: enables Linux memory controls such as `mlock`, `prefault`, and NUMA helpers.
+- `atomic-slots`: enables formally sound slot implementation using `AtomicU64` stripes instead of `write_volatile`/`read_volatile`. Zero performance cost on x86-64; ~5-10ns reader overhead on ARM64 due to acquire fence. Eliminates formal undefined behavior under the Rust abstract machine. Passes Miri.
 
 Rust 1.94+ is supported. For best performance, compile with `-C target-cpu=native` to enable `PREFETCHW` and other CPU-specific optimizations.
 
@@ -218,6 +221,8 @@ The `Pod` trait means more than `Copy`: every possible bit pattern of the payloa
 | Rust `enum` | Only declared variants are valid | `u8` or `u32` |
 | `&T`, `&str` | Pointers must be valid | Value types only |
 | `String`, `Vec<_>` | Heap-owning, has `Drop` | Fixed `[u8; N]` buffer |
+
+> **Formal soundness:** The default implementation uses `write_volatile`/`read_volatile` for maximum performance, which is formally a data race under the Rust abstract machine (same as every seqlock in Rust, including the Linux kernel's). Enable the `atomic-slots` feature for a formally sound implementation that uses `AtomicU64` stripes. On x86-64, `atomic-slots` produces identical machine code (zero performance regression).
 
 > [!TIP]
 > Keep rich domain types at the edges and publish compact `Pod` messages in the middle. Convert enums, `Option`, booleans, and strings into explicit numeric fields or fixed-size buffers before calling `publish`.
