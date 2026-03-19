@@ -68,7 +68,7 @@ impl<T: Pod> MpPublisher<T> {
     pub fn publish(&self, value: T) {
         // SAFETY: next_seq_ptr points to ring.next_seq (MPMC ring), kept alive by self.ring.
         let next_seq_atomic = unsafe { &*self.next_seq_ptr };
-        let seq = next_seq_atomic.fetch_add(1, Ordering::Relaxed);
+        let seq = next_seq_atomic.fetch_add(1, Ordering::AcqRel);
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
         let slot = unsafe { &*self.slots_ptr.add((seq & self.mask) as usize) };
         prefetch_write_next(self.slots_ptr, (seq + 1) & self.mask);
@@ -95,7 +95,7 @@ impl<T: Pod> MpPublisher<T> {
     pub fn publish_with(&self, f: impl FnOnce(&mut core::mem::MaybeUninit<T>)) {
         // SAFETY: next_seq_ptr points to ring.next_seq (MPMC ring), kept alive by self.ring.
         let next_seq_atomic = unsafe { &*self.next_seq_ptr };
-        let seq = next_seq_atomic.fetch_add(1, Ordering::Relaxed);
+        let seq = next_seq_atomic.fetch_add(1, Ordering::AcqRel);
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
         let slot = unsafe { &*self.slots_ptr.add((seq & self.mask) as usize) };
         prefetch_write_next(self.slots_ptr, (seq + 1) & self.mask);
