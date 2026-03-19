@@ -16,7 +16,6 @@ exclude = [".github/"]
 [features]
 hugepages = ["dep:libc"]
 derive = ["dep:photon-ring-derive"]
-atomic-slots = []
 
 [dependencies]
 hashbrown = "0.16.1"
@@ -65,7 +64,6 @@ name = "prefetchw_crosscore"
 harness = false
 
 [package.metadata.docs.rs]
-# Enables all features (derive, hugepages, atomic-slots) in docs.rs builds.
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 targets = ["x86_64-unknown-linux-gnu"]

@@ -18,8 +18,6 @@
 //! - **Per-consumer cursor** — zero contention between subscribers.
 //! - **Single-producer** — no write-side synchronisation; the seqlock invariant
 //!   is upheld by `&mut self` on [`Publisher::publish`].
-//! - **`atomic-slots` feature** — formally sound variant that uses `AtomicU64` stripes
-//!   instead of `write_volatile`. Zero cost on x86-64. See the `atomic-slots` feature flag.
 //!
 //! ## Quick start
 //!

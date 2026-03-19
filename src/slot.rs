@@ -4,13 +4,8 @@
 use crate::pod::Pod;
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
+use core::ptr;
 use core::sync::atomic::{fence, AtomicU64, Ordering};
-
-/// Number of `AtomicU64` stripes needed to hold a value of type `T`.
-#[inline(always)]
-const fn stripe_count<T>() -> usize {
-    core::mem::size_of::<T>().div_ceil(8)
-}
 
 /// A cache-line-aligned slot holding a seqlock stamp and a payload.
 ///
@@ -53,17 +48,16 @@ impl<T> Slot<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Default implementation: volatile-based seqlock (fastest, practical UB)
-// ---------------------------------------------------------------------------
-#[cfg(not(feature = "atomic-slots"))]
 impl<T: Pod> Slot<T> {
     /// Seqlock write protocol. Single-writer only.
     ///
-    /// Uses `write_volatile` for the payload store. This avoids practical UB
-    /// on all target architectures (x86, ARM) but is formally a data race
-    /// under the Rust abstract machine. Enable the `atomic-slots` feature
-    /// for a formally sound implementation.
+    /// 1. Store odd stamp (writing)
+    /// 2. Release fence — odd stamp visible before data write
+    /// 3. Write value via `write_volatile` — prevents compiler elision and
+    ///    is formally sound even when a concurrent reader observes a
+    ///    partially-written value (the reader's `read_volatile` + stamp
+    ///    re-check discards torn reads).
+    /// 4. Release store of even stamp — data visible before done stamp
     #[inline]
     pub(crate) fn write(&self, seq: u64, value: T) {
         let writing = seq * 2 + 1;
@@ -73,11 +67,12 @@ impl<T: Pod> Slot<T> {
         fence(Ordering::Release);
 
         // SAFETY: single-writer guarantee — no concurrent writes to this slot.
-        // write_volatile avoids practical UB on all target architectures (x86, ARM);
+        // write_volatile prevents the compiler from eliding or reordering the
+        // store, and avoids practical UB on all target architectures (x86, ARM);
         // formally still a data race under the Rust abstract machine, as volatile
         // does not establish a happens-before relationship. Sound because T: Pod
         // makes all bit patterns valid and the stamp re-check gates usage.
-        unsafe { core::ptr::write_volatile(self.value.get() as *mut T, value) };
+        unsafe { ptr::write_volatile(self.value.get() as *mut T, value) };
 
         self.stamp.store(done, Ordering::Release);
     }
@@ -105,8 +100,13 @@ impl<T: Pod> Slot<T> {
         self.stamp.store(writing, Ordering::Relaxed);
         fence(Ordering::Release);
 
-        // SAFETY: single-writer guarantee + tmp initialized by closure.
-        unsafe { core::ptr::write_volatile(self.value.get() as *mut T, tmp.assume_init()) };
+        // SAFETY: single-writer guarantee — no concurrent writes to this slot.
+        // write_volatile avoids practical UB on all target architectures (x86, ARM);
+        // formally still a data race under the Rust abstract machine, as volatile
+        // does not establish a happens-before relationship. Sound because T: Pod
+        // makes all bit patterns valid and the stamp re-check gates usage.
+        // tmp was initialized by the closure (caller contract).
+        unsafe { ptr::write_volatile(self.value.get() as *mut T, tmp.assume_init()) };
 
         self.stamp.store(done, Ordering::Release);
     }
@@ -115,19 +115,24 @@ impl<T: Pod> Slot<T> {
     ///
     /// Returns `Err(actual_stamp)` if the slot holds a different sequence.
     ///
-    /// Uses `read_volatile` for the payload load. Formally a data race under
-    /// the Rust abstract machine. Enable `atomic-slots` for formal soundness.
+    /// Uses `read_volatile` instead of `ptr::read` to avoid formal UB when the
+    /// slot is mid-write. The volatile read prevents the compiler from assuming
+    /// the memory is in a valid state, and the subsequent stamp re-check gates
+    /// whether the value is actually used.
     #[inline]
     pub(crate) fn try_read(&self, seq: u64) -> Result<Option<T>, u64> {
         let expected = seq * 2 + 2;
 
         let s1 = self.stamp.load(Ordering::Acquire);
 
+        // Happy path first — stamp matches expected sequence
         if s1 == expected {
-            // SAFETY: read_volatile avoids practical UB on all target architectures.
-            // Formally a data race. T: Pod makes all bit patterns valid; stamp
-            // re-check gates usage.
-            let value = unsafe { core::ptr::read_volatile((*self.value.get()).as_ptr()) };
+            // SAFETY: read_volatile avoids practical UB on all target architectures
+            // (x86, ARM); formally still a data race under the Rust abstract machine,
+            // as volatile does not establish a happens-before relationship. Sound
+            // because T: Pod makes all bit patterns valid and the stamp re-check
+            // gates usage.
+            let value = unsafe { ptr::read_volatile((*self.value.get()).as_ptr()) };
             let s2 = self.stamp.load(Ordering::Acquire);
             if s1 == s2 {
                 return Ok(Some(value));
@@ -135,161 +140,12 @@ impl<T: Pod> Slot<T> {
             return Ok(None); // torn read
         }
 
+        // Write in progress — caller should spin
         if s1 & 1 != 0 {
             return Ok(None);
         }
 
+        // Wrong sequence (not written yet, or overwritten by a later sequence)
         Err(s1)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// atomic-slots: formally sound implementation using AtomicU64 stripes
-// ---------------------------------------------------------------------------
-//
-// Replaces write_volatile/read_volatile with per-u64 atomic stores/loads.
-// On x86-64, AtomicU64::store/load(Relaxed) compiles to identical MOV
-// instructions — zero performance cost. On ARM64, one extra DMB ISHLD
-// barrier in the reader path (~5-10ns).
-//
-// All memory accesses go through Atomic* types, so there are no data races
-// under the Rust abstract machine. Miri-passable. Formally sound.
-#[cfg(feature = "atomic-slots")]
-impl<T: Pod> Slot<T> {
-    /// Seqlock write protocol using atomic stripes. Single-writer only.
-    ///
-    /// Decomposes `T` into `ceil(size_of::<T>() / 8)` u64 chunks and
-    /// stores each one atomically with `Relaxed` ordering. The `Release`
-    /// stamp store at the end ensures all stripe stores are visible to
-    /// any reader that observes the "done" stamp.
-    ///
-    /// On x86-64, `AtomicU64::store(Relaxed)` compiles to plain `MOV` —
-    /// identical machine code to the volatile-based implementation.
-    #[inline]
-    pub(crate) fn write(&self, seq: u64, value: T) {
-        let writing = seq * 2 + 1;
-        let done = seq * 2 + 2;
-
-        self.stamp.store(writing, Ordering::Relaxed);
-        fence(Ordering::Release);
-
-        let n = stripe_count::<T>();
-        let src = &value as *const T as *const u8;
-        let dst = self.value.get() as *mut u64;
-
-        for i in 0..n {
-            let chunk = unsafe { read_stripe(src, i, core::mem::size_of::<T>()) };
-            // SAFETY: dst is within the Slot's UnsafeCell, properly aligned
-            // (Slot is align(64)). AtomicU64::from_ptr requires *mut u64
-            // with proper alignment and no mixed atomic/non-atomic access.
-            // Under atomic-slots, all accesses to this memory go through
-            // AtomicU64, satisfying the no-mixing requirement.
-            unsafe { AtomicU64::from_ptr(dst.add(i)) }.store(chunk, Ordering::Relaxed);
-        }
-
-        self.stamp.store(done, Ordering::Release);
-    }
-
-    /// Seqlock write via closure using atomic stripes.
-    #[inline]
-    pub(crate) fn write_with(&self, seq: u64, f: impl FnOnce(&mut MaybeUninit<T>)) {
-        let mut tmp = MaybeUninit::<T>::uninit();
-        f(&mut tmp);
-
-        // SAFETY: closure contract — tmp is initialized.
-        let value = unsafe { tmp.assume_init() };
-        self.write(seq, value);
-    }
-
-    /// Seqlock read protocol using atomic stripes. Formally sound.
-    ///
-    /// Loads each u64 stripe atomically with `Relaxed` ordering. An
-    /// `Acquire` fence after all stripe loads ensures they complete
-    /// before the second stamp check (required on ARM; no-op on x86).
-    ///
-    /// All memory accesses are through `Atomic*` types — no data races
-    /// exist under the Rust abstract machine.
-    #[inline]
-    pub(crate) fn try_read(&self, seq: u64) -> Result<Option<T>, u64> {
-        let expected = seq * 2 + 2;
-
-        // Acquire: orders all subsequent loads (stripe loads) after this.
-        let s1 = self.stamp.load(Ordering::Acquire);
-
-        if s1 == expected {
-            let n = stripe_count::<T>();
-            let src = self.value.get() as *mut u64;
-            let mut buf = MaybeUninit::<T>::uninit();
-            let dst = buf.as_mut_ptr() as *mut u8;
-
-            for i in 0..n {
-                // SAFETY: src is within the Slot's UnsafeCell, properly aligned.
-                // Under atomic-slots, all accesses go through AtomicU64.
-                let chunk = unsafe { AtomicU64::from_ptr(src.add(i)) }.load(Ordering::Relaxed);
-                unsafe { write_stripe(dst, i, chunk, core::mem::size_of::<T>()) };
-            }
-
-            // Acquire fence: ensures all stripe loads above complete before
-            // the second stamp load below. Required on ARM (DMB ISHLD);
-            // no-op on x86 (TSO provides load-load ordering).
-            fence(Ordering::Acquire);
-
-            // Relaxed is sufficient here because the fence above orders it.
-            let s2 = self.stamp.load(Ordering::Relaxed);
-            if s1 == s2 {
-                // SAFETY: all stripes loaded atomically between matching stamps.
-                // T: Pod guarantees every bit pattern is valid.
-                return Ok(Some(unsafe { buf.assume_init() }));
-            }
-            return Ok(None); // torn read (stamps diverged)
-        }
-
-        if s1 & 1 != 0 {
-            return Ok(None);
-        }
-
-        Err(s1)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Stripe read/write helpers (used by atomic-slots)
-// ---------------------------------------------------------------------------
-
-/// Read 8 bytes from `src` at stripe offset `i`, handling the last partial
-/// stripe by reading only the remaining bytes and zero-padding.
-#[cfg(feature = "atomic-slots")]
-#[inline(always)]
-unsafe fn read_stripe(src: *const u8, i: usize, size: usize) -> u64 {
-    let offset = i * 8;
-    if offset + 8 <= size {
-        // Full 8-byte stripe — read directly.
-        (src.add(offset) as *const u64).read_unaligned()
-    } else {
-        // Partial last stripe — zero-pad.
-        let remaining = size - offset;
-        let mut buf = 0u64;
-        core::ptr::copy_nonoverlapping(src.add(offset), &mut buf as *mut u64 as *mut u8, remaining);
-        buf
-    }
-}
-
-/// Write 8 bytes of a stripe to `dst` at stripe offset `i`, handling the
-/// last partial stripe by writing only the remaining bytes.
-#[cfg(feature = "atomic-slots")]
-#[inline(always)]
-unsafe fn write_stripe(dst: *mut u8, i: usize, chunk: u64, size: usize) {
-    let offset = i * 8;
-    if offset + 8 <= size {
-        // Full 8-byte stripe — write directly.
-        (dst.add(offset) as *mut u64).write_unaligned(chunk);
-    } else {
-        // Partial last stripe — write only remaining bytes.
-        let remaining = size - offset;
-        core::ptr::copy_nonoverlapping(
-            &chunk as *const u64 as *const u8,
-            dst.add(offset),
-            remaining,
-        );
     }
 }

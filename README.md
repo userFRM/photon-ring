@@ -55,7 +55,6 @@ Optional features:
 
 - `derive`: enables `#[derive(photon_ring::DerivePod)]` for user-defined `Pod` types.
 - `hugepages`: enables Linux memory controls such as `mlock`, `prefault`, and NUMA helpers.
-- `atomic-slots`: enables formally sound slot implementation using `AtomicU64` stripes instead of `write_volatile`/`read_volatile`. Zero performance cost on x86-64; ~5-10ns reader overhead on ARM64 due to acquire fence. Eliminates formal undefined behavior under the Rust abstract machine. Passes Miri.
 
 Rust 1.94+ is supported. For best performance, compile with `-C target-cpu=native` to enable `PREFETCHW` and other CPU-specific optimizations.
 
@@ -219,8 +218,6 @@ The `Pod` trait means more than `Copy`: every possible bit pattern of the payloa
 | Rust `enum` | Only declared variants are valid | `u8` or `u32` |
 | `&T`, `&str` | Pointers must be valid | Value types only |
 | `String`, `Vec<_>` | Heap-owning, has `Drop` | Fixed `[u8; N]` buffer |
-
-> **Formal soundness:** The default implementation uses `write_volatile`/`read_volatile` for maximum performance, which is formally a data race under the Rust abstract machine (same as every seqlock in Rust, including the Linux kernel's). Enable the `atomic-slots` feature for a formally sound implementation that uses `AtomicU64` stripes. On x86-64, `atomic-slots` produces identical machine code (zero performance regression).
 
 > [!TIP]
 > Keep rich domain types at the edges and publish compact `Pod` messages in the middle. Convert enums, `Option`, booleans, and strings into explicit numeric fields or fixed-size buffers before calling `publish`.
