@@ -43,7 +43,8 @@ impl Pipeline {
     /// first, or the threads may run indefinitely.
     ///
     /// If any stage panicked, the first panic is resumed after all threads
-    /// have been joined.
+    /// have been joined. Use [`try_join`](Pipeline::try_join) to handle
+    /// panics without re-unwinding.
     pub fn join(mut self) {
         let handles = core::mem::take(&mut self.handles);
         let mut first_panic = None;
@@ -56,6 +57,27 @@ impl Pipeline {
         }
         if let Some(panic) = first_panic {
             std::panic::resume_unwind(panic);
+        }
+    }
+
+    /// Wait for all stage threads to finish, returning any panic payload
+    /// instead of re-unwinding.
+    ///
+    /// Returns `Ok(())` if all stages completed cleanly, or
+    /// `Err(payload)` with the first panic payload if any stage panicked.
+    pub fn try_join(mut self) -> Result<(), alloc::boxed::Box<dyn core::any::Any + Send>> {
+        let handles = core::mem::take(&mut self.handles);
+        let mut first_panic = None;
+        for h in handles {
+            if let Err(e) = h.join() {
+                if first_panic.is_none() {
+                    first_panic = Some(e);
+                }
+            }
+        }
+        match first_panic {
+            Some(panic) => Err(panic),
+            None => Ok(()),
         }
     }
 
