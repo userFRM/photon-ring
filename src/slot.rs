@@ -7,6 +7,7 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::{fence, AtomicU64, Ordering};
 
 /// Number of `AtomicU64` stripes needed to hold a value of type `T`.
+#[cfg(feature = "atomic-slots")]
 #[inline(always)]
 const fn stripe_count<T>() -> usize {
     core::mem::size_of::<T>().div_ceil(8)
