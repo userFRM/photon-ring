@@ -261,8 +261,9 @@ impl<T: Pod, const N: usize> Drop for SubscriberGroup<T, N> {
     fn drop(&mut self) {
         if let Some(ref tracker) = self.tracker {
             if let Some(ref bp) = self.ring.backpressure {
+                let weak = Arc::downgrade(tracker);
                 let mut trackers = bp.trackers.lock();
-                trackers.retain(|t| !Arc::ptr_eq(t, tracker));
+                trackers.retain(|t| !t.ptr_eq(&weak));
             }
         }
     }

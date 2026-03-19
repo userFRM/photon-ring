@@ -4,7 +4,7 @@
 use crate::pod::Pod;
 use crate::slot::Slot;
 use alloc::boxed::Box;
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::sync::atomic::AtomicU64;
 use spin::Mutex;
@@ -27,9 +27,11 @@ pub(crate) struct BackpressureState {
     /// How many slots of headroom to leave between the publisher and the
     /// slowest subscriber.
     pub(crate) watermark: u64,
-    /// Per-subscriber cursor trackers. The publisher scans these to find the
-    /// minimum (slowest) cursor when it is close to lapping.
-    pub(crate) trackers: Mutex<Vec<Arc<Padded<AtomicU64>>>>,
+    /// Per-subscriber cursor trackers (weak references). The publisher scans
+    /// these to find the minimum (slowest) cursor when it is close to lapping.
+    /// Weak references prevent a panicked subscriber (that fails to drop) from
+    /// blocking the publisher forever.
+    pub(crate) trackers: Mutex<Vec<Weak<Padded<AtomicU64>>>>,
 }
 
 /// Shared ring buffer: a pre-allocated array of seqlock-stamped slots
@@ -136,26 +138,35 @@ impl<T: Pod> SharedRing<T> {
     pub(crate) fn register_tracker(&self, initial: u64) -> Option<Arc<Padded<AtomicU64>>> {
         let bp = self.backpressure.as_ref()?;
         let tracker = Arc::new(Padded(AtomicU64::new(initial)));
-        bp.trackers.lock().push(tracker.clone());
+        bp.trackers.lock().push(Arc::downgrade(&tracker));
         Some(tracker)
     }
 
     /// Scan all subscriber trackers and return the minimum cursor.
-    /// Returns `None` if there are no subscribers.
+    /// Returns `None` if there are no live subscribers. Dead (dropped)
+    /// trackers are pruned during the scan.
     #[inline]
     pub(crate) fn slowest_cursor(&self) -> Option<u64> {
         let bp = self.backpressure.as_ref()?;
-        let trackers = bp.trackers.lock();
-        if trackers.is_empty() {
-            return None;
-        }
+        let mut trackers = bp.trackers.lock();
         let mut min = u64::MAX;
-        for t in trackers.iter() {
-            let val = t.0.load(core::sync::atomic::Ordering::Relaxed);
-            if val < min {
-                min = val;
+        let mut has_live = false;
+        trackers.retain(|weak| {
+            if let Some(arc) = weak.upgrade() {
+                let val = arc.0.load(core::sync::atomic::Ordering::Relaxed);
+                if val < min {
+                    min = val;
+                }
+                has_live = true;
+                true // retain live tracker
+            } else {
+                false // prune dead tracker
             }
+        });
+        if has_live {
+            Some(min)
+        } else {
+            None
         }
-        Some(min)
     }
 }

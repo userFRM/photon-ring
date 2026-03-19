@@ -85,6 +85,10 @@ pub unsafe fn prefault_pages(ptr: *mut u8, size: usize) {
 /// mem::reset_numa_policy();
 /// ```
 pub fn set_numa_preferred(node: usize) -> bool {
+    let max_node = core::mem::size_of::<libc::c_ulong>() * 8;
+    if node >= max_node {
+        return false;
+    }
     // MPOL_PREFERRED = 1: prefer the specified node, fall back to others.
     let nodemask: libc::c_ulong = 1u64.wrapping_shl(node as u32) as libc::c_ulong;
     let maxnode = core::mem::size_of::<libc::c_ulong>() * 8;

@@ -68,8 +68,10 @@ impl<T: Pod> Slot<T> {
 
         // SAFETY: single-writer guarantee — no concurrent writes to this slot.
         // write_volatile prevents the compiler from eliding or reordering the
-        // store, and avoids formal UB from ptr::write on potentially-aliased
-        // memory (a concurrent reader may be mid-read_volatile on the same bytes).
+        // store, and avoids practical UB on all target architectures (x86, ARM);
+        // formally still a data race under the Rust abstract machine, as volatile
+        // does not establish a happens-before relationship. Sound because T: Pod
+        // makes all bit patterns valid and the stamp re-check gates usage.
         unsafe { ptr::write_volatile(self.value.get() as *mut T, value) };
 
         self.stamp.store(done, Ordering::Release);
@@ -99,7 +101,10 @@ impl<T: Pod> Slot<T> {
         fence(Ordering::Release);
 
         // SAFETY: single-writer guarantee — no concurrent writes to this slot.
-        // write_volatile avoids formal UB from concurrent readers (same as write()).
+        // write_volatile avoids practical UB on all target architectures (x86, ARM);
+        // formally still a data race under the Rust abstract machine, as volatile
+        // does not establish a happens-before relationship. Sound because T: Pod
+        // makes all bit patterns valid and the stamp re-check gates usage.
         // tmp was initialized by the closure (caller contract).
         unsafe { ptr::write_volatile(self.value.get() as *mut T, tmp.assume_init()) };
 
@@ -122,9 +127,11 @@ impl<T: Pod> Slot<T> {
 
         // Happy path first — stamp matches expected sequence
         if s1 == expected {
-            // SAFETY: read_volatile is sound even if the writer is mid-store on
-            // another core — the stamp re-check below gates whether we use the
-            // value. This eliminates the formal UB of ptr::read on torn data.
+            // SAFETY: read_volatile avoids practical UB on all target architectures
+            // (x86, ARM); formally still a data race under the Rust abstract machine,
+            // as volatile does not establish a happens-before relationship. Sound
+            // because T: Pod makes all bit patterns valid and the stamp re-check
+            // gates usage.
             let value = unsafe { ptr::read_volatile((*self.value.get()).as_ptr()) };
             let s2 = self.stamp.load(Ordering::Acquire);
             if s1 == s2 {
