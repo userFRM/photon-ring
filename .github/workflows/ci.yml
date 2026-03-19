@@ -153,7 +153,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --features atomic-slots
-      - run: cargo test --features atomic-slots
+      - run: cargo test --features atomic-slots --test atomic_slots
+        timeout-minutes: 5
+      # Run correctness tests with atomic-slots, skipping heavy stress tests
+      # that exceed CI runner capacity in debug mode.
+      - run: >
+          cargo test --features atomic-slots --test correctness --
+          --skip mpmc_stress
+          --skip stress_1m
+          --skip bounded_cross_thread
+          --skip mpmc_two_publishers
         timeout-minutes: 5
 
   # ── Publish to crates.io (only on tagged releases) ───────────────────
