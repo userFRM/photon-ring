@@ -614,5 +614,5 @@ The impossibility proofs demonstrate that no other approach can achieve formal s
 ## Implementation Status
 
 Design 6 (ASCL / Atomic Stripe Compile-Time Layout) has been implemented as the
-`atomic-slots` feature in photon-ring v2.3.0. Benchmark results confirm the
+`atomic-slots` feature in photon-ring v2.4.0. Benchmark results confirm the
 zero-cost prediction on x86-64. See CHANGELOG.md for details.

@@ -50,7 +50,7 @@ assert_eq!(s.try_recv(), Ok(100));
 
 ```toml
 [dependencies]
-photon-ring = "2.3.0"
+photon-ring = "2.4.0"
 ```
 
 Optional features:

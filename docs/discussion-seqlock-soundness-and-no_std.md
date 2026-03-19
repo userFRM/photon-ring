@@ -167,5 +167,5 @@ one extra DMB barrier in the reader (~5-10ns).
 
 Users who need formal soundness can opt in via:
 ```toml
-photon-ring = { version = "2.3.0", features = ["atomic-slots"] }
+photon-ring = { version = "2.4.0", features = ["atomic-slots"] }
 ```
