@@ -21,6 +21,53 @@ use spin::Mutex;
 #[repr(align(64))]
 pub struct Padded<T>(pub T);
 
+// ---------------------------------------------------------------------------
+// RingIndex — encapsulates slot indexing for both pow2 and arbitrary capacity
+// ---------------------------------------------------------------------------
+
+/// Precomputed indexing constants for mapping sequence numbers to ring slots.
+///
+/// For power-of-two capacities, uses bitwise AND (single-cycle, ~0.3 ns).
+/// For arbitrary capacities, uses Lemire's fastmod algorithm (~1.5 ns):
+/// two 64-bit multiplies with no division instruction.
+///
+/// Reference: Daniel Lemire, "Faster Remainder by Direct Computation" (2019),
+/// <https://arxiv.org/abs/1902.01961>
+#[derive(Clone, Copy)]
+pub(crate) struct RingIndex {
+    /// Ring capacity.
+    pub(crate) capacity: u64,
+    /// For power-of-two: `capacity - 1`. For arbitrary: unused but harmless.
+    pub(crate) mask: u64,
+    /// Precomputed reciprocal for fast modulo: `floor(2^64 / capacity)`.
+    /// Used to approximate `n / capacity` via `mulhi(n, reciprocal)`.
+    pub(crate) reciprocal: u64,
+    /// True if capacity is a power of two (use AND instead of fastmod).
+    pub(crate) is_pow2: bool,
+}
+
+impl RingIndex {
+    /// Create a new `RingIndex` for the given capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `capacity < 2`.
+    pub(crate) fn new(capacity: usize) -> Self {
+        assert!(capacity >= 2, "capacity must be at least 2");
+        let cap = capacity as u64;
+        let is_pow2 = capacity.is_power_of_two();
+        let mask = if is_pow2 { cap - 1 } else { 0 };
+        // Reciprocal: floor(2^64 / d). Used with mulhi to approximate n/d.
+        let reciprocal = ((1u128 << 64) / cap as u128) as u64;
+        RingIndex {
+            capacity: cap,
+            mask,
+            reciprocal,
+            is_pow2,
+        }
+    }
+}
+
 /// Backpressure state attached to a [`SharedRing`] when created via
 /// [`channel_bounded`](crate::channel::channel_bounded).
 pub(crate) struct BackpressureState {
@@ -41,7 +88,7 @@ pub(crate) struct BackpressureState {
 /// (`u64::MAX` means nothing published yet).
 pub(crate) struct SharedRing<T> {
     slots: Box<[Slot<T>]>,
-    pub(crate) mask: u64,
+    pub(crate) index: RingIndex,
     pub(crate) cursor: Padded<AtomicU64>,
     /// Present only for bounded (backpressure-capable) channels.
     pub(crate) backpressure: Option<BackpressureState>,
@@ -52,17 +99,13 @@ pub(crate) struct SharedRing<T> {
 
 impl<T: Pod> SharedRing<T> {
     pub(crate) fn new(capacity: usize) -> Self {
-        assert!(
-            capacity.is_power_of_two(),
-            "capacity must be a power of two"
-        );
-        assert!(capacity >= 2, "capacity must be at least 2");
+        let index = RingIndex::new(capacity);
 
         let slots: Vec<Slot<T>> = (0..capacity).map(|_| Slot::new()).collect();
 
         SharedRing {
             slots: slots.into_boxed_slice(),
-            mask: (capacity - 1) as u64,
+            index,
             cursor: Padded(AtomicU64::new(u64::MAX)),
             backpressure: None,
             next_seq: None,
@@ -70,18 +113,15 @@ impl<T: Pod> SharedRing<T> {
     }
 
     pub(crate) fn new_bounded(capacity: usize, watermark: usize) -> Self {
-        assert!(
-            capacity.is_power_of_two(),
-            "capacity must be a power of two"
-        );
         assert!(capacity >= 2, "capacity must be at least 2");
         assert!(watermark < capacity, "watermark must be less than capacity");
 
+        let index = RingIndex::new(capacity);
         let slots: Vec<Slot<T>> = (0..capacity).map(|_| Slot::new()).collect();
 
         SharedRing {
             slots: slots.into_boxed_slice(),
-            mask: (capacity - 1) as u64,
+            index,
             cursor: Padded(AtomicU64::new(u64::MAX)),
             backpressure: Some(BackpressureState {
                 watermark: watermark as u64,
@@ -92,17 +132,13 @@ impl<T: Pod> SharedRing<T> {
     }
 
     pub(crate) fn new_mpmc(capacity: usize) -> Self {
-        assert!(
-            capacity.is_power_of_two(),
-            "capacity must be a power of two"
-        );
-        assert!(capacity >= 2, "capacity must be at least 2");
+        let index = RingIndex::new(capacity);
 
         let slots: Vec<Slot<T>> = (0..capacity).map(|_| Slot::new()).collect();
 
         SharedRing {
             slots: slots.into_boxed_slice(),
-            mask: (capacity - 1) as u64,
+            index,
             cursor: Padded(AtomicU64::new(u64::MAX)),
             backpressure: None,
             next_seq: Some(Padded(AtomicU64::new(0))),
@@ -130,7 +166,7 @@ impl<T: Pod> SharedRing<T> {
 
     #[inline]
     pub(crate) fn capacity(&self) -> u64 {
-        self.mask + 1
+        self.index.capacity
     }
 
     /// Register a new subscriber tracker and return it.

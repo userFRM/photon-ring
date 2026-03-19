@@ -31,7 +31,7 @@ struct TopicEntry<T: Pod> {
 }
 
 impl<T: Pod> Photon<T> {
-    /// Create a bus. `capacity` is the ring size for each topic (power of two).
+    /// Create a bus. `capacity` is the ring size for each topic (>= 2).
     pub fn new(capacity: usize) -> Self {
         Photon {
             topics: Mutex::new(HashMap::new()),

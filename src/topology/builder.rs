@@ -3,6 +3,7 @@
 
 use crate::channel::{self, Publisher, Subscribable, Subscriber};
 use crate::pod::Pod;
+use crate::wait::WaitStrategy;
 
 use super::fan_out::FanOutBuilder;
 use super::pipeline::Pipeline;
@@ -97,6 +98,9 @@ impl<T: Pod> StageBuilder<T> {
     ///
     /// Spawns a dedicated thread that reads from the current stage's
     /// output channel, applies `f`, and publishes to a new channel.
+    /// Uses [`WaitStrategy::default()`] (adaptive) for the stage's
+    /// wait behavior. Use [`then_with`](Self::then_with) to specify a
+    /// custom wait strategy.
     ///
     /// # Example
     ///
@@ -117,12 +121,51 @@ impl<T: Pod> StageBuilder<T> {
     /// pipe.shutdown();
     /// pipe.join();
     /// ```
-    pub fn then<U: Pod>(mut self, f: impl Fn(T) -> U + Send + 'static) -> StageBuilder<U> {
+    pub fn then<U: Pod>(self, f: impl Fn(T) -> U + Send + 'static) -> StageBuilder<U> {
+        self.then_with(f, WaitStrategy::default())
+    }
+
+    /// Add a processing stage with a custom wait strategy.
+    ///
+    /// Identical to [`then`](Self::then), but allows specifying a
+    /// [`WaitStrategy`] that controls how the stage waits when no
+    /// message is available.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use photon_ring::topology::Pipeline;
+    /// use photon_ring::WaitStrategy;
+    ///
+    /// let (mut pub_, stages) = Pipeline::builder()
+    ///     .capacity(64)
+    ///     .input::<u64>();
+    ///
+    /// let (mut out, pipe) = stages
+    ///     .then_with(|x| x * 2, WaitStrategy::YieldSpin)
+    ///     .then_with(|x| x + 1, WaitStrategy::BackoffSpin)
+    ///     .build();
+    ///
+    /// pub_.publish(10);
+    /// assert_eq!(out.recv(), 21);
+    /// pipe.shutdown();
+    /// pipe.join();
+    /// ```
+    pub fn then_with<U: Pod>(
+        mut self,
+        f: impl Fn(T) -> U + Send + 'static,
+        strategy: WaitStrategy,
+    ) -> StageBuilder<U> {
         let (next_pub, next_subs) = channel::channel::<U>(self.capacity);
         let next_sub = next_subs.subscribe();
 
-        let (status, handle) =
-            spawn_stage(self.subscriber, next_pub, self.state.shutdown.clone(), f);
+        let (status, handle) = spawn_stage(
+            self.subscriber,
+            next_pub,
+            self.state.shutdown.clone(),
+            f,
+            strategy,
+        );
         self.state.handles.push(handle);
         self.state.statuses.push(status);
 
@@ -182,8 +225,21 @@ impl<T: Pod> StageBuilder<T> {
         // Branch B gets a fresh subscriber from the same source ring.
         let input_b = self.subscribable.subscribe();
 
-        let (status_a, handle_a) = spawn_stage(input_a, pub_a, self.state.shutdown.clone(), fa);
-        let (status_b, handle_b) = spawn_stage(input_b, pub_b, self.state.shutdown.clone(), fb);
+        let default_strategy = WaitStrategy::default();
+        let (status_a, handle_a) = spawn_stage(
+            input_a,
+            pub_a,
+            self.state.shutdown.clone(),
+            fa,
+            default_strategy,
+        );
+        let (status_b, handle_b) = spawn_stage(
+            input_b,
+            pub_b,
+            self.state.shutdown.clone(),
+            fb,
+            default_strategy,
+        );
 
         self.state.handles.push(handle_a);
         self.state.handles.push(handle_b);

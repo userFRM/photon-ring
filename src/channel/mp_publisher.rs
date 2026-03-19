@@ -24,8 +24,14 @@ pub struct MpPublisher<T: Pod> {
     /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
     /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
     pub(super) slots_ptr: *const Slot<T>,
-    /// Cached ring mask (`capacity - 1`). Immutable after construction.
+    /// Cached ring capacity. Immutable after construction.
+    pub(super) capacity: u64,
+    /// Cached ring mask (`capacity - 1`). Used for pow2 fast path.
     pub(super) mask: u64,
+    /// Precomputed Lemire reciprocal for arbitrary-capacity fastmod.
+    pub(super) reciprocal: u64,
+    /// True if capacity is a power of two (AND instead of fastmod).
+    pub(super) is_pow2: bool,
     /// Cached raw pointer to `ring.cursor.0`. Avoids Arc deref on hot path.
     pub(super) cursor_ptr: *const AtomicU64,
     /// Cached raw pointer to `ring.next_seq`. Avoids Arc deref + Option
@@ -38,7 +44,10 @@ impl<T: Pod> Clone for MpPublisher<T> {
         MpPublisher {
             ring: self.ring.clone(),
             slots_ptr: self.slots_ptr,
+            capacity: self.capacity,
             mask: self.mask,
+            reciprocal: self.reciprocal,
+            is_pow2: self.is_pow2,
             cursor_ptr: self.cursor_ptr,
             next_seq_ptr: self.next_seq_ptr,
         }
@@ -51,6 +60,21 @@ unsafe impl<T: Pod> Send for MpPublisher<T> {}
 unsafe impl<T: Pod> Sync for MpPublisher<T> {}
 
 impl<T: Pod> MpPublisher<T> {
+    /// Map a sequence number to a slot index.
+    #[inline(always)]
+    fn slot_index(&self, seq: u64) -> usize {
+        if self.is_pow2 {
+            (seq & self.mask) as usize
+        } else {
+            let q = ((seq as u128 * self.reciprocal as u128) >> 64) as u64;
+            let mut r = seq - q.wrapping_mul(self.capacity);
+            if r >= self.capacity {
+                r -= self.capacity;
+            }
+            r as usize
+        }
+    }
+
     /// Publish a single value. Zero-allocation, O(1) amortised.
     ///
     /// Multiple threads may call this concurrently. Each call atomically
@@ -70,8 +94,8 @@ impl<T: Pod> MpPublisher<T> {
         let next_seq_atomic = unsafe { &*self.next_seq_ptr };
         let seq = next_seq_atomic.fetch_add(1, Ordering::AcqRel);
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
-        let slot = unsafe { &*self.slots_ptr.add((seq & self.mask) as usize) };
-        prefetch_write_next(self.slots_ptr, (seq + 1) & self.mask);
+        let slot = unsafe { &*self.slots_ptr.add(self.slot_index(seq)) };
+        prefetch_write_next(self.slots_ptr, self.slot_index(seq + 1) as u64);
         slot.write(seq, value);
         self.advance_cursor(seq);
     }
@@ -97,8 +121,8 @@ impl<T: Pod> MpPublisher<T> {
         let next_seq_atomic = unsafe { &*self.next_seq_ptr };
         let seq = next_seq_atomic.fetch_add(1, Ordering::AcqRel);
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
-        let slot = unsafe { &*self.slots_ptr.add((seq & self.mask) as usize) };
-        prefetch_write_next(self.slots_ptr, (seq + 1) & self.mask);
+        let slot = unsafe { &*self.slots_ptr.add(self.slot_index(seq)) };
+        prefetch_write_next(self.slots_ptr, self.slot_index(seq + 1) as u64);
         slot.write_with(seq, f);
         self.advance_cursor(seq);
     }
@@ -113,7 +137,7 @@ impl<T: Pod> MpPublisher<T> {
         unsafe { &*self.next_seq_ptr }.load(Ordering::Relaxed)
     }
 
-    /// Ring capacity (power of two).
+    /// Ring capacity.
     #[inline]
     pub fn capacity(&self) -> u64 {
         self.ring.capacity()
@@ -150,7 +174,7 @@ impl<T: Pod> MpPublisher<T> {
         // of retrying the cursor CAS (shared cache line).
         if seq > 0 {
             // SAFETY: slots_ptr is valid for the lifetime of self.ring.
-            let pred_slot = unsafe { &*self.slots_ptr.add(((seq - 1) & self.mask) as usize) };
+            let pred_slot = unsafe { &*self.slots_ptr.add(self.slot_index(seq - 1)) };
             let pred_done = (seq - 1) * 2 + 2;
             // Check stamp >= pred_done to handle rare ring-wrap case where
             // a later sequence already overwrote the predecessor's slot.
@@ -205,7 +229,7 @@ impl<T: Pod> MpPublisher<T> {
             }
             // Check if the next slot's stamp shows a completed write.
             let done_stamp = next * 2 + 2;
-            let slot = unsafe { &*self.slots_ptr.add((next & self.mask) as usize) };
+            let slot = unsafe { &*self.slots_ptr.add(self.slot_index(next)) };
             if slot.stamp_load() < done_stamp {
                 break;
             }

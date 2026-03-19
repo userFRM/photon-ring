@@ -34,11 +34,14 @@ impl<T: Pod> Subscribable<T> {
         let start = if head == u64::MAX { 0 } else { head + 1 };
         let tracker = self.ring.register_tracker(start);
         let slots_ptr = self.ring.slots_ptr();
-        let mask = self.ring.mask;
+        let idx = self.ring.index;
         Subscriber {
             ring: self.ring.clone(),
             slots_ptr,
-            mask,
+            capacity: idx.capacity,
+            mask: idx.mask,
+            reciprocal: idx.reciprocal,
+            is_pow2: idx.is_pow2,
             cursor: start,
             tracker,
             total_lagged: 0,
@@ -62,11 +65,14 @@ impl<T: Pod> Subscribable<T> {
         let start = if head == u64::MAX { 0 } else { head + 1 };
         let tracker = self.ring.register_tracker(start);
         let slots_ptr = self.ring.slots_ptr();
-        let mask = self.ring.mask;
+        let idx = self.ring.index;
         SubscriberGroup {
             ring: self.ring.clone(),
             slots_ptr,
-            mask,
+            capacity: idx.capacity,
+            mask: idx.mask,
+            reciprocal: idx.reciprocal,
+            is_pow2: idx.is_pow2,
             cursor: start,
             total_lagged: 0,
             total_received: 0,
@@ -88,11 +94,14 @@ impl<T: Pod> Subscribable<T> {
         };
         let tracker = self.ring.register_tracker(start);
         let slots_ptr = self.ring.slots_ptr();
-        let mask = self.ring.mask;
+        let idx = self.ring.index;
         Subscriber {
             ring: self.ring.clone(),
             slots_ptr,
-            mask,
+            capacity: idx.capacity,
+            mask: idx.mask,
+            reciprocal: idx.reciprocal,
+            is_pow2: idx.is_pow2,
             cursor: start,
             tracker,
             total_lagged: 0,
@@ -125,11 +134,14 @@ impl<T: Pod> Subscribable<T> {
             .register_tracker(start)
             .or_else(|| Some(Arc::new(Padded(AtomicU64::new(start)))));
         let slots_ptr = self.ring.slots_ptr();
-        let mask = self.ring.mask;
+        let idx = self.ring.index;
         Subscriber {
             ring: self.ring.clone(),
             slots_ptr,
-            mask,
+            capacity: idx.capacity,
+            mask: idx.mask,
+            reciprocal: idx.reciprocal,
+            is_pow2: idx.is_pow2,
             cursor: start,
             tracker,
             total_lagged: 0,

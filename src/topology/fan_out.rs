@@ -3,6 +3,7 @@
 
 use crate::channel::{self, Subscribable, Subscriber};
 use crate::pod::Pod;
+use crate::wait::WaitStrategy;
 
 use super::pipeline::Pipeline;
 use super::{spawn_stage, SharedState};
@@ -41,11 +42,32 @@ impl<A: Pod, B: Pod> FanOutBuilder<A, B> {
     /// Add a processing stage after branch A.
     ///
     /// Transforms `A -> A2` on a dedicated thread. Branch B is unchanged.
-    pub fn then_a<A2: Pod>(mut self, f: impl Fn(A) -> A2 + Send + 'static) -> FanOutBuilder<A2, B> {
+    /// Uses [`WaitStrategy::default()`] (adaptive). Use
+    /// [`then_a_with`](Self::then_a_with) for a custom strategy.
+    pub fn then_a<A2: Pod>(self, f: impl Fn(A) -> A2 + Send + 'static) -> FanOutBuilder<A2, B> {
+        self.then_a_with(f, WaitStrategy::default())
+    }
+
+    /// Add a processing stage after branch A with a custom wait strategy.
+    ///
+    /// Identical to [`then_a`](Self::then_a), but allows specifying a
+    /// [`WaitStrategy`] that controls how the stage waits when no
+    /// message is available.
+    pub fn then_a_with<A2: Pod>(
+        mut self,
+        f: impl Fn(A) -> A2 + Send + 'static,
+        strategy: WaitStrategy,
+    ) -> FanOutBuilder<A2, B> {
         let (next_pub, next_subs) = channel::channel::<A2>(self.capacity);
         let next_sub = next_subs.subscribe();
 
-        let (status, handle) = spawn_stage(self.sub_a, next_pub, self.state.shutdown.clone(), f);
+        let (status, handle) = spawn_stage(
+            self.sub_a,
+            next_pub,
+            self.state.shutdown.clone(),
+            f,
+            strategy,
+        );
         self.state.handles.push(handle);
         self.state.statuses.push(status);
 
@@ -62,11 +84,32 @@ impl<A: Pod, B: Pod> FanOutBuilder<A, B> {
     /// Add a processing stage after branch B.
     ///
     /// Transforms `B -> B2` on a dedicated thread. Branch A is unchanged.
-    pub fn then_b<B2: Pod>(mut self, f: impl Fn(B) -> B2 + Send + 'static) -> FanOutBuilder<A, B2> {
+    /// Uses [`WaitStrategy::default()`] (adaptive). Use
+    /// [`then_b_with`](Self::then_b_with) for a custom strategy.
+    pub fn then_b<B2: Pod>(self, f: impl Fn(B) -> B2 + Send + 'static) -> FanOutBuilder<A, B2> {
+        self.then_b_with(f, WaitStrategy::default())
+    }
+
+    /// Add a processing stage after branch B with a custom wait strategy.
+    ///
+    /// Identical to [`then_b`](Self::then_b), but allows specifying a
+    /// [`WaitStrategy`] that controls how the stage waits when no
+    /// message is available.
+    pub fn then_b_with<B2: Pod>(
+        mut self,
+        f: impl Fn(B) -> B2 + Send + 'static,
+        strategy: WaitStrategy,
+    ) -> FanOutBuilder<A, B2> {
         let (next_pub, next_subs) = channel::channel::<B2>(self.capacity);
         let next_sub = next_subs.subscribe();
 
-        let (status, handle) = spawn_stage(self.sub_b, next_pub, self.state.shutdown.clone(), f);
+        let (status, handle) = spawn_stage(
+            self.sub_b,
+            next_pub,
+            self.state.shutdown.clone(),
+            f,
+            strategy,
+        );
         self.state.handles.push(handle);
         self.state.statuses.push(status);
 

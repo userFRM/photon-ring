@@ -3,3 +3,8 @@
 *.d
 rust_out
 photon-ring-derive/target/
+photon-ring-async/target/
+photon-ring-metrics/target/
+photon-ring-async/Cargo.lock
+photon-ring-metrics/Cargo.lock
+photon-ring-derive/Cargo.lock

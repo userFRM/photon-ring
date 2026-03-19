@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Arbitrary ring capacity:** Ring capacity no longer requires power-of-two.
+  Any capacity >= 2 is supported. Power-of-two uses bitwise AND (zero regression);
+  arbitrary capacity uses Lemire reciprocal-multiply fastmod (~1.5 ns).
+  15 new tests including exhaustive fastmod verification.
+- **Pipeline `then_with()` API:** `StageBuilder::then_with(f, WaitStrategy)`,
+  `FanOutBuilder::then_a_with()`, `then_b_with()` for configurable stage wait
+  behavior. Existing `then()`/`then_a()`/`then_b()` unchanged (delegate with default).
+- **`#[photon(as_enum)]` derive attribute:** The Message derive macro no longer
+  silently assumes unknown types are `#[repr(u8)]` enums. Unrecognized types now
+  produce a compile error. Use `#[photon(as_enum)]` to explicitly mark enum fields.
+  **Breaking change** for Message derive users with enum fields.
+- **`photon-ring-async` crate:** Runtime-agnostic async wrappers for photon-ring
+  channels. `AsyncSubscriber`, `AsyncSubscriberGroup` with yield-based polling.
+  Named `RecvFuture`/`GroupRecvFuture` for `select!`/`join!` combinators.
+  Configurable spin budget. No tokio dependency. 8 tests.
+- **`photon-ring-metrics` crate:** Observability wrappers with `SubscriberMetrics`
+  (snapshot/delta tracking), `PublisherMetrics`. Framework-agnostic. 7 tests.
+- **Loom MPMC model tests:** Standalone loom model of the MPMC cursor advancement
+  protocol. 4 scenarios covering 2-producer basic, contention, consumer reads,
+  and cursor catch-up. Run with `cargo test --test loom_mpmc --release`.
+
+### Changed
+- `RingIndex` struct encapsulates capacity, mask, reciprocal, and is_pow2 flag.
+  Internal to the crate; no public API change.
+
+### Breaking
+- `#[derive(photon_ring::DeriveMessage)]` enum fields now require `#[photon(as_enum)]`.
+
 ## [2.4.0] - 2026-03-19
 
 ### Performance

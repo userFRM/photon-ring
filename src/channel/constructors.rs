@@ -10,8 +10,9 @@ use alloc::sync::Arc;
 
 /// Create a Photon SPMC channel.
 ///
-/// `capacity` must be a power of two (>= 2). Returns the single-producer
-/// write end and a clone-able factory for creating consumers.
+/// `capacity` must be >= 2. Any positive integer is accepted; power-of-two
+/// capacities use a single-cycle AND for slot indexing, while arbitrary
+/// capacities use Lemire fastmod (~1.5 ns overhead per indexing operation).
 ///
 /// # Example
 /// ```
@@ -23,14 +24,17 @@ use alloc::sync::Arc;
 pub fn channel<T: Pod>(capacity: usize) -> (Publisher<T>, Subscribable<T>) {
     let ring = Arc::new(SharedRing::new(capacity));
     let slots_ptr = ring.slots_ptr();
-    let mask = ring.mask;
+    let idx = ring.index;
     let cursor_ptr = ring.cursor_ptr();
     (
         Publisher {
             has_backpressure: ring.backpressure.is_some(),
             ring: ring.clone(),
             slots_ptr,
-            mask,
+            capacity: idx.capacity,
+            mask: idx.mask,
+            reciprocal: idx.reciprocal,
+            is_pow2: idx.is_pow2,
             cursor_ptr,
             seq: 0,
             cached_slowest: 0,
@@ -48,8 +52,8 @@ pub fn channel<T: Pod>(capacity: usize) -> (Publisher<T>, Subscribable<T>) {
 /// Unlike the default lossy [`channel()`], no messages are ever dropped.
 ///
 /// # Arguments
-/// - `capacity` — ring size, must be a power of two (>= 2).
-/// - `watermark` — headroom slots; must be less than `capacity`.
+/// - `capacity` -- ring size, must be >= 2.
+/// - `watermark` -- headroom slots; must be less than `capacity`.
 ///   A watermark of 0 means the publisher blocks as soon as all slots are
 ///   occupied. A watermark of `capacity - 1` means it blocks when only one
 ///   slot is free.
@@ -80,14 +84,17 @@ pub fn channel_bounded<T: Pod>(
 ) -> (Publisher<T>, Subscribable<T>) {
     let ring = Arc::new(SharedRing::new_bounded(capacity, watermark));
     let slots_ptr = ring.slots_ptr();
-    let mask = ring.mask;
+    let idx = ring.index;
     let cursor_ptr = ring.cursor_ptr();
     (
         Publisher {
             has_backpressure: ring.backpressure.is_some(),
             ring: ring.clone(),
             slots_ptr,
-            mask,
+            capacity: idx.capacity,
+            mask: idx.mask,
+            reciprocal: idx.reciprocal,
+            is_pow2: idx.is_pow2,
             cursor_ptr,
             seq: 0,
             cached_slowest: 0,
@@ -98,9 +105,8 @@ pub fn channel_bounded<T: Pod>(
 
 /// Create a Photon MPMC (multi-producer, multi-consumer) channel.
 ///
-/// `capacity` must be a power of two (>= 2). Returns a clone-able
-/// [`MpPublisher`] and the same [`Subscribable`] factory used by SPMC
-/// channels.
+/// `capacity` must be >= 2. Returns a clone-able [`MpPublisher`] and the
+/// same [`Subscribable`] factory used by SPMC channels.
 ///
 /// Multiple threads can clone the publisher and publish concurrently.
 /// Subscribers work identically to the SPMC case.
@@ -121,7 +127,7 @@ pub fn channel_mpmc<T: Pod>(capacity: usize) -> (MpPublisher<T>, Subscribable<T>
     use core::sync::atomic::AtomicU64;
     let ring = Arc::new(SharedRing::new_mpmc(capacity));
     let slots_ptr = ring.slots_ptr();
-    let mask = ring.mask;
+    let idx = ring.index;
     let cursor_ptr = ring.cursor_ptr();
     let next_seq_ptr = &ring
         .next_seq
@@ -132,7 +138,10 @@ pub fn channel_mpmc<T: Pod>(capacity: usize) -> (MpPublisher<T>, Subscribable<T>
         MpPublisher {
             ring: ring.clone(),
             slots_ptr,
-            mask,
+            capacity: idx.capacity,
+            mask: idx.mask,
+            reciprocal: idx.reciprocal,
+            is_pow2: idx.is_pow2,
             cursor_ptr,
             next_seq_ptr,
         },

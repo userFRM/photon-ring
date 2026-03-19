@@ -1711,3 +1711,375 @@ fn subscribe_regular_has_tracker_on_bounded() {
         "subscribe() on bounded channel should have a tracker"
     );
 }
+
+// -------------------------------------------------------------------------
+// Arbitrary capacity (non-power-of-two)
+// -------------------------------------------------------------------------
+
+#[test]
+fn arbitrary_capacity_basic() {
+    let (mut p, s) = channel::<u64>(100);
+    let mut sub = s.subscribe();
+
+    for i in 0..100 {
+        p.publish(i);
+    }
+    for i in 0..100 {
+        assert_eq!(sub.try_recv(), Ok(i));
+    }
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(p.capacity(), 100);
+}
+
+#[test]
+fn arbitrary_capacity_prime() {
+    // Prime capacity (97) — worst case for any modular arithmetic scheme.
+    let (mut p, s) = channel::<u64>(97);
+    let mut sub = s.subscribe();
+
+    for i in 0..1000 {
+        p.publish(i);
+    }
+
+    // Consumer should detect lag — only 97 slots, published 1000.
+    let mut received = Vec::new();
+    loop {
+        match sub.try_recv() {
+            Ok(v) => received.push(v),
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Lagged { .. }) => {}
+        }
+    }
+
+    // Should have the last 97 messages.
+    assert_eq!(received.len(), 97);
+    assert_eq!(*received.last().unwrap(), 999);
+    // Values must be monotonically increasing.
+    for window in received.windows(2) {
+        assert!(
+            window[1] > window[0],
+            "out of order: {} -> {}",
+            window[0],
+            window[1]
+        );
+    }
+}
+
+#[test]
+fn arbitrary_capacity_stress() {
+    // Non-power-of-two capacity, cross-thread stress test.
+    let (mut p, s) = channel::<u64>(1000);
+    let mut sub = s.subscribe();
+    let n = 100_000u64;
+
+    let writer = std::thread::spawn(move || {
+        for i in 0..n {
+            p.publish(i);
+        }
+    });
+
+    let reader = std::thread::spawn(move || {
+        let mut last = None;
+        let mut count = 0u64;
+        loop {
+            match sub.try_recv() {
+                Ok(v) => {
+                    if let Some(prev) = last {
+                        assert!(v > prev, "out of order: {prev} -> {v}");
+                    }
+                    last = Some(v);
+                    count += 1;
+                    if v == n - 1 {
+                        break;
+                    }
+                }
+                Err(TryRecvError::Empty) => core::hint::spin_loop(),
+                Err(TryRecvError::Lagged { .. }) => {}
+            }
+        }
+        count
+    });
+
+    writer.join().unwrap();
+    let count = reader.join().unwrap();
+    assert!(count > 0);
+}
+
+#[test]
+fn arbitrary_capacity_bounded() {
+    // Bounded channel with non-power-of-two capacity.
+    let (mut p, s) = channel_bounded::<u64>(100, 0);
+    let mut sub = s.subscribe();
+
+    // Fill the ring.
+    for i in 0u64..100 {
+        p.try_publish(i).unwrap();
+    }
+
+    // Ring is full — backpressure should kick in.
+    assert_eq!(p.try_publish(999), Err(PublishError::Full(999)));
+
+    // Drain all.
+    for i in 0u64..100 {
+        assert_eq!(sub.try_recv(), Ok(i));
+    }
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+
+    // Publisher can continue after drain.
+    p.try_publish(999).unwrap();
+    assert_eq!(sub.try_recv(), Ok(999));
+}
+
+#[test]
+fn arbitrary_capacity_bounded_cross_thread() {
+    // Cross-thread bounded with non-power-of-two capacity.
+    let (mut p, s) = channel_bounded::<u64>(100, 0);
+    let mut sub = s.subscribe();
+    let n = 10_000u64;
+
+    let writer = std::thread::spawn(move || {
+        for i in 0..n {
+            loop {
+                match p.try_publish(i) {
+                    Ok(()) => break,
+                    Err(PublishError::Full(_)) => core::hint::spin_loop(),
+                }
+            }
+        }
+    });
+
+    let reader = std::thread::spawn(move || {
+        for expected in 0..n {
+            loop {
+                match sub.try_recv() {
+                    Ok(v) => {
+                        assert_eq!(v, expected, "corruption at seq {expected}");
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => core::hint::spin_loop(),
+                    Err(TryRecvError::Lagged { .. }) => {
+                        panic!("bounded channel should never lag");
+                    }
+                }
+            }
+        }
+    });
+
+    writer.join().unwrap();
+    reader.join().unwrap();
+}
+
+#[test]
+fn arbitrary_capacity_mpmc() {
+    // MPMC with non-power-of-two capacity.
+    let (pub1, subs) = channel_mpmc::<u64>(100);
+    let pub2 = pub1.clone();
+    let mut sub = subs.subscribe();
+
+    pub1.publish(1);
+    pub2.publish(2);
+
+    assert_eq!(sub.try_recv(), Ok(1));
+    assert_eq!(sub.try_recv(), Ok(2));
+    assert_eq!(sub.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(pub1.capacity(), 100);
+}
+
+#[test]
+fn arbitrary_capacity_mpmc_stress() {
+    // Cross-thread MPMC with non-power-of-two capacity.
+    let (pub_, subs) = channel_mpmc::<u64>(500);
+    let n_per_pub = 5_000u64;
+    let n_pubs = 4u64;
+    let total = n_per_pub * n_pubs;
+
+    let mut sub = subs.subscribe();
+
+    let mut writers = Vec::new();
+    for pid in 0..n_pubs {
+        let p = pub_.clone();
+        writers.push(std::thread::spawn(move || {
+            for i in 0..n_per_pub {
+                p.publish(pid * n_per_pub + i);
+            }
+        }));
+    }
+
+    let reader = std::thread::spawn(move || {
+        let mut count = 0u64;
+        loop {
+            match sub.try_recv() {
+                Ok(_v) => {
+                    count += 1;
+                    if count >= total {
+                        break;
+                    }
+                }
+                Err(TryRecvError::Empty) => {
+                    if count >= total {
+                        break;
+                    }
+                    core::hint::spin_loop();
+                }
+                Err(TryRecvError::Lagged { skipped }) => {
+                    count += skipped;
+                }
+            }
+        }
+        count
+    });
+
+    for w in writers {
+        w.join().unwrap();
+    }
+
+    let count = reader.join().unwrap();
+    assert_eq!(count, total, "reader saw {count} of {total}");
+}
+
+#[test]
+fn arbitrary_capacity_subscriber_group() {
+    // Subscriber group with non-power-of-two capacity.
+    let (mut p, s) = channel::<u64>(100);
+    let mut group = s.subscribe_group::<3>();
+
+    for i in 0..50 {
+        p.publish(i);
+    }
+
+    for i in 0..50 {
+        assert_eq!(group.try_recv(), Ok(i));
+    }
+    assert_eq!(group.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[test]
+fn arbitrary_capacity_publish_with() {
+    // publish_with with non-power-of-two capacity.
+    let (mut p, s) = channel::<u64>(100);
+    let mut sub = s.subscribe();
+
+    for i in 0u64..50 {
+        p.publish_with(|slot| {
+            slot.write(i);
+        });
+    }
+
+    for i in 0u64..50 {
+        assert_eq!(sub.try_recv(), Ok(i));
+    }
+}
+
+#[test]
+fn arbitrary_capacity_wrap_around_correctness() {
+    // Verify correctness across multiple ring wraps for a non-pow2 capacity.
+    // With capacity=7, publish 7*10=70 messages in lockstep.
+    let (mut p, s) = channel_bounded::<u64>(7, 0);
+    let mut sub = s.subscribe();
+
+    for cycle in 0..10u64 {
+        for slot_idx in 0..7u64 {
+            let val = cycle * 7 + slot_idx;
+            p.try_publish(val).unwrap();
+        }
+        assert_eq!(p.try_publish(9999), Err(PublishError::Full(9999)));
+        for slot_idx in 0..7u64 {
+            let val = cycle * 7 + slot_idx;
+            assert_eq!(sub.try_recv(), Ok(val));
+        }
+    }
+}
+
+#[test]
+fn arbitrary_capacity_subscribe_from_oldest() {
+    // subscribe_from_oldest with non-power-of-two capacity.
+    let (mut p, s) = channel::<u64>(100);
+    for i in 0..200 {
+        p.publish(i);
+    }
+
+    let mut sub = s.subscribe_from_oldest();
+    // Oldest in ring: 200 - 100 = 100
+    assert_eq!(sub.try_recv(), Ok(100));
+}
+
+#[test]
+fn arbitrary_capacity_bus() {
+    // Named-topic bus with non-power-of-two capacity.
+    let bus = Photon::<u64>::new(100);
+    let mut p = bus.publisher("quotes");
+    let mut sub = bus.subscribe("quotes");
+
+    p.publish(42);
+    assert_eq!(sub.try_recv(), Ok(42));
+}
+
+#[test]
+fn arbitrary_capacity_typed_bus() {
+    // TypedBus with non-power-of-two capacity.
+    let bus = TypedBus::new(100);
+    let mut p = bus.publisher::<f64>("prices");
+    let mut sub = bus.subscribe::<f64>("prices");
+
+    p.publish(42.5);
+    assert_eq!(sub.try_recv(), Ok(42.5));
+}
+
+#[test]
+fn fastmod_correctness_exhaustive_small() {
+    // Exhaustively verify reciprocal-multiply modulo matches true modulo
+    // for small capacities across a wide range of sequence numbers.
+    for cap in 2u64..=50 {
+        let reciprocal = ((1u128 << 64) / cap as u128) as u64;
+        for seq in 0..cap * 10 {
+            let q = ((seq as u128 * reciprocal as u128) >> 64) as u64;
+            let mut r = seq - q.wrapping_mul(cap);
+            if r >= cap {
+                r -= cap;
+            }
+            assert_eq!(
+                r,
+                seq % cap,
+                "fastmod({seq}, cap={cap}) = {r}, expected {}",
+                seq % cap
+            );
+        }
+    }
+}
+
+#[test]
+fn fastmod_correctness_large_sequences() {
+    // Verify reciprocal-multiply modulo with large sequence numbers
+    // (near u64::MAX wrapping region) and various capacities.
+    let capacities = [3, 7, 97, 100, 1000, 65537];
+    for &cap in &capacities {
+        let cap = cap as u64;
+        let reciprocal = ((1u128 << 64) / cap as u128) as u64;
+        // Test near-zero, mid-range, and near-max
+        let test_seqs = [
+            0,
+            1,
+            cap - 1,
+            cap,
+            cap + 1,
+            1_000_000,
+            u64::MAX / 2,
+            u64::MAX - cap,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+        for &seq in &test_seqs {
+            let q = ((seq as u128 * reciprocal as u128) >> 64) as u64;
+            let mut r = seq - q.wrapping_mul(cap);
+            if r >= cap {
+                r -= cap;
+            }
+            assert_eq!(
+                r,
+                seq % cap,
+                "fastmod({seq}, cap={cap}) = {r}, expected {}",
+                seq % cap
+            );
+        }
+    }
+}
