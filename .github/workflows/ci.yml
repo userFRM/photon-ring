@@ -31,7 +31,12 @@ jobs:
       - run: cargo test --all-targets
         timeout-minutes: 5
       - run: cargo test --doc
-      - run: cargo test --workspace --all-features
+      - run: >
+          cargo test --workspace --all-features --
+          --skip mpmc_stress
+          --skip stress_1m
+          --skip bounded_cross_thread
+          --skip mpmc_two_publishers
         timeout-minutes: 5
 
   # ── Lint with Clippy ──────────────────────────────────────────────────
