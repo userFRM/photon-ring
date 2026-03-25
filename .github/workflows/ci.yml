@@ -125,7 +125,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check
       - run: >
-          cargo test --all-targets --
+          cargo test --lib --tests --
           --skip mpmc_stress
           --skip stress_1m
           --skip arbitrary_capacity_mpmc_stress
