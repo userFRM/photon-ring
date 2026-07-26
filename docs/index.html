@@ -967,8 +967,9 @@ Write protocol:                Read protocol:
     <!-- Payload scaling -->
     <h3 style="color:var(--text-bright);font-size:1rem;font-weight:600;margin-bottom:8px;">Payload scaling</h3>
     <p class="note-inline mb-16">
-      Across 8 B &ndash; 4 KiB payloads, latency stays dominated by cross-core cache-coherence
-      transfer rather than the memcpy. See <a href="payload-scaling.html">full payload scaling analysis</a>.
+      At cache-line-sized payloads the copy is a few percent of latency &mdash; cross-core
+      cache-coherence transfer dominates. The copy only becomes co-dominant in the KiB range.
+      See <a href="payload-scaling.html">full payload scaling analysis</a>.
     </p>
     <img
       class="payload-img"

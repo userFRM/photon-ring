@@ -151,7 +151,7 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
 ### Throughput
 
 - **Sustained throughput:** about 300M msg/s on Intel and 88M msg/s on M1 Pro
-- **Payload scaling:** across 8-byte to 4 KiB `Pod` payloads, latency stays dominated by cross-core cache-coherence transfer rather than the memcpy; see [`docs/payload-scaling.md`](docs/payload-scaling.md)
+- **Payload scaling:** at cache-line-sized payloads the copy is a few percent of latency — cross-core cache-coherence transfer dominates. The copy only becomes co-dominant in the KiB range; see [`docs/payload-scaling.md`](docs/payload-scaling.md)
 
 ## Comparison
 
