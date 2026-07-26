@@ -30,9 +30,7 @@ unsafe impl<T: Pod> Sync for Subscribable<T> {}
 impl<T: Pod> Subscribable<T> {
     /// Create a subscriber that will see only **future** messages.
     pub fn subscribe(&self) -> Subscriber<T> {
-        let head = self.ring.cursor.0.load(Ordering::Acquire);
-        let start = if head == u64::MAX { 0 } else { head + 1 };
-        let tracker = self.ring.register_tracker(start);
+        let (start, tracker) = self.ring.register_tracker_at_head();
         let slots_ptr = self.ring.slots_ptr();
         let idx = self.ring.index;
         Subscriber {
@@ -108,6 +106,13 @@ impl<T: Pod> Subscribable<T> {
 
     /// Create a subscriber starting from the **oldest available** message
     /// still in the ring (or 0 if nothing published yet).
+    ///
+    /// Note that on a bounded channel the no-loss guarantee only applies from
+    /// the subscription point forward. This starts at a sequence the publisher
+    /// was already entitled to overwrite, and registering cannot retroactively
+    /// reserve it, so the retained history it starts from may be lapped before
+    /// it is read. Use [`subscribe`](Self::subscribe) if you need the guarantee
+    /// from the first message you see.
     pub fn subscribe_from_oldest(&self) -> Subscriber<T> {
         let head = self.ring.cursor.0.load(Ordering::Acquire);
         let cap = self.ring.capacity();
@@ -148,14 +153,10 @@ impl<T: Pod> Subscribable<T> {
     /// with the ring's backpressure system — it is purely for dependency
     /// graph coordination.
     pub fn subscribe_tracked(&self) -> Subscriber<T> {
-        let head = self.ring.cursor.0.load(Ordering::Acquire);
-        let start = if head == u64::MAX { 0 } else { head + 1 };
-        // On bounded channels, register_tracker returns Some (backpressure-aware).
-        // On lossy channels, it returns None — so we create a standalone tracker.
-        let tracker = self
-            .ring
-            .register_tracker(start)
-            .or_else(|| Some(Arc::new(Padded(AtomicU64::new(start)))));
+        // On bounded channels this registers for backpressure; on lossy channels
+        // it returns None, so we create a standalone tracker purely for barriers.
+        let (start, tracker) = self.ring.register_tracker_at_head();
+        let tracker = tracker.or_else(|| Some(Arc::new(Padded(AtomicU64::new(start)))));
         let slots_ptr = self.ring.slots_ptr();
         let idx = self.ring.index;
         Subscriber {

@@ -197,6 +197,37 @@ impl<T: Pod> SharedRing<T> {
         Some(tracker)
     }
 
+    /// Pick a subscriber's start position and register its tracker atomically
+    /// with respect to the publisher's tracker scan.
+    ///
+    /// Reading the head cursor and registering separately is racy: the publisher
+    /// only rescans trackers when its cached slowest cursor says it is close to
+    /// lapping (see `Publisher::has_room`). A subscriber that reads the head,
+    /// stalls, and registers late can therefore be invisible to a publisher
+    /// whose cached value came from a faster consumer — and be lapped before the
+    /// next rescan, losing messages it was promised.
+    ///
+    /// Taking the tracker lock across both steps closes that window. Any rescan
+    /// ordered before this call observed the tracker set when the head was no
+    /// further along than the value read here, which bounds the publisher's
+    /// cached budget below this subscriber's first slot; any rescan ordered
+    /// after it sees this tracker.
+    ///
+    /// Returns the start sequence and the tracker (`None` on a lossy channel,
+    /// where nothing gates the publisher and no window exists).
+    pub(crate) fn register_tracker_at_head(&self) -> (u64, Option<Arc<Padded<AtomicU64>>>) {
+        let Some(bp) = self.backpressure.as_ref() else {
+            let head = self.cursor.0.load(core::sync::atomic::Ordering::Acquire);
+            return (if head == u64::MAX { 0 } else { head + 1 }, None);
+        };
+        let mut trackers = bp.trackers.lock();
+        let head = self.cursor.0.load(core::sync::atomic::Ordering::Acquire);
+        let start = if head == u64::MAX { 0 } else { head + 1 };
+        let tracker = Arc::new(Padded(AtomicU64::new(start)));
+        trackers.push(Arc::downgrade(&tracker));
+        (start, Some(tracker))
+    }
+
     /// Scan all subscriber trackers and return the minimum cursor.
     /// Returns `None` if there are no live subscribers. Dead (dropped)
     /// trackers are pruned during the scan.

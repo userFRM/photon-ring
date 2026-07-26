@@ -50,6 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Crate packages exclude `docs/`, `verification/`, and `scripts/`.
 
 ### Fixed
+- **A newly registered subscriber could be lapped on a bounded channel.**
+  `subscribe()` read the head cursor and registered its tracker as two separate
+  steps. The publisher only rescans trackers when its cached slowest cursor says
+  it is close to lapping, so a subscriber that registered in the gap was invisible
+  to a publisher whose cached value came from a faster consumer — and could be
+  overwritten before the next rescan, losing messages the bounded channel had
+  promised it. Both steps now happen under the tracker lock, which orders them
+  against the scan. `subscribe_from_oldest` is inherently exempt: it starts at a
+  sequence the publisher was already entitled to overwrite, which registration
+  cannot retroactively reserve, and this is now documented on the method.
 - **Missing read-side `Acquire` fence in the default (volatile) slot read.**
   `try_read` loaded the payload, then re-checked the stamp with an acquire *load*.
   An acquire load is a one-way barrier: it stops later accesses from moving
