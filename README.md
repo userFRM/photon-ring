@@ -127,11 +127,6 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
 > [!NOTE]
 > These numbers use `Pod` payloads and compare concrete implementations, not abstract algorithms. Scheduler noise, pinning, CPU generation, and payload layout all matter, so treat them as reproducible snapshots rather than universal constants.
 
-### Against `disruptor-rs`
-
-- **Publish:** not directly comparable as measured here — photon's publish-only benchmark ran with no consumer attached, while `disruptor-rs` always runs one, so the gap partly measures cache-coherence traffic that photon never paid. Use the `publish, live consumer` benchmarks for a like-for-like figure.
-- **Cross-thread roundtrip:** 95 ns (Intel) / 130 ns (M1 Pro), versus 138 ns / 186 ns for `disruptor-rs`
-
 ### Core operations
 
 ```
@@ -195,22 +190,24 @@ debug tap can be added and removed on a live system without perturbing it.
 `cargo run --release --example degradation` demonstrates both scenarios;
 `tests/degradation.rs` asserts them.
 
-## Comparison
+## At a glance
 
-| | Photon Ring | disruptor-rs (v4) | crossbeam-channel | bus |
-|---|---|---|---|---|
-| **Delivery** | Broadcast | Broadcast | Point-to-point queue | Broadcast |
-| **Publish cost** | 2.8 ns / 12.1 ns (MPMC) | 30.6 ns | - | - |
-| **Cross-thread** | 95 ns | 138 ns | - | - |
-| **Throughput** | ~300M msg/s | - | - | - |
-| **Topology builder** | Yes | Yes | No | No |
-| **Batch APIs** | Yes | Yes | Iterator | No |
-| **Topic bus** | Yes | No | No | No |
-| **Backpressure** | Optional | Default | Default | Default |
-| **`no_std`** | Yes | No | No | No |
-| **Multi-producer** | Yes | Yes | Yes | No |
+| Capability | Photon Ring |
+|---|---|
+| **Delivery** | Broadcast — every subscriber sees every message |
+| **Publish** | 2.8 ns lossy, 7.96 ns bounded with a live consumer |
+| **Cross-thread roundtrip** | 95 ns |
+| **Throughput** | ~300M msg/s sustained |
+| **Per-consumer contracts** | Gating and non-gating subscribers on one ring |
+| **Consumer failure** | A dead consumer releases the publisher |
+| **Hot attach** | Subscribe to and detach from a running ring |
+| **Topologies** | Pipelines, fan-out, managed terminal consumers |
+| **Topic bus** | Named topics, and a typed bus for per-topic payload types |
+| **Backpressure** | Optional, per subscriber |
+| **`no_std`** | Yes, with `alloc` |
+| **Multi-producer** | Yes |
 
-Use `crossbeam-channel` when one receiver should own each message. Use Photon Ring when each subscriber should observe the same stream with minimal coordination overhead.
+Photon Ring is for streams where every subscriber should observe every message with minimal coordination between them. If instead each message should be owned by exactly one receiver, a work queue is the better shape.
 
 ## API overview
 
