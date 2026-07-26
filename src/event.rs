@@ -16,6 +16,11 @@
 //! there is no seqlock either: the cursor's `Release`/`Acquire` pair is the
 //! entire publication edge.
 //!
+//! Because nothing is copied, the cost is proportional to what you actually
+//! touch rather than to `size_of::<T>()`. Updating a few fields of a large,
+//! mostly-stable message is dramatically cheaper than a ring that must copy the
+//! whole value in and out; rewriting the entire payload every message is not.
+//!
 //! The trade is that **every** subscriber gates the publisher. There are no
 //! lossy observers here — a reader that could be lapped is exactly the reader
 //! this design excludes. Use [`channel`](crate::channel) when you want those.

@@ -34,12 +34,31 @@ macro_rules! pair {
                 black_box(sub.try_recv().unwrap().0[0]);
             });
         });
-        $c.bench_function(&format!("event ring {} ({}B)", $label, n), |b| {
+        // Touching one field: the case where a large message is mostly stable
+        // and the publisher updates a little of it.
+        $c.bench_function(&format!("event ring {} ({}B) 1 field", $label, n), |b| {
             let (mut tx, rx) = photon_ring::event_channel(1024, <$t>::default);
             let mut sub = rx.subscribe();
             b.iter(|| {
                 tx.publish(|v| v.0[0] = black_box(1));
                 black_box(sub.process(|v| v.0[0]).unwrap());
+            });
+        });
+        // Rewriting the whole payload: the fair comparison against a ring that
+        // must copy the entire value in and out regardless.
+        $c.bench_function(&format!("event ring {} ({}B) full write", $label, n), |b| {
+            let (mut tx, rx) = photon_ring::event_channel(1024, <$t>::default);
+            let mut sub = rx.subscribe();
+            b.iter(|| {
+                tx.publish(|v| {
+                    for w in v.0.iter_mut() {
+                        *w = black_box(1);
+                    }
+                });
+                black_box(
+                    sub.process(|v| v.0.iter().fold(0u64, |a, &w| a ^ w))
+                        .unwrap(),
+                );
             });
         });
     }};

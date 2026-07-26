@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Release`/`Acquire` pair is the whole publication edge, so there are no stamps,
   no torn-read retry and no fence on this path.
 
+  The cost model differs from the `Pod` ring in a way worth knowing: an event
+  ring costs what the publisher and subscriber actually touch, while the `Pod`
+  ring costs `size_of::<T>()` on every publish and every receive regardless.
+  Updating a few fields of a 4 KiB payload measures 7.9 ns against 207.7 ns for
+  the copying ring; at 8 B, where there is no copy worth avoiding, the `Pod` ring
+  is slightly ahead (3.8 ns against 4.1 ns). Rewriting an entire large payload
+  every message collects no copy advantage.
+
   The trade is that every subscriber gates the publisher — there are no lossy
   observers on an event ring, because a reader that can be lapped is exactly the
   reader this design excludes. `channel()` remains for broadcast with lossy taps.
