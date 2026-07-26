@@ -58,7 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supports and benchmarks — a reader could therefore return data from a later
   overwrite as a valid read. Fixed by placing an `Acquire` fence between the
   payload read and the re-check, mirroring both the `atomic-slots` path and the
-  `smp_rmb()` in the Linux kernel's `read_seqcount_retry()`. No-op on x86.
+  `smp_rmb()` in the Linux kernel's `read_seqcount_retry()`. On x86 it emits no
+  instruction, but it is still a compiler barrier: the same-thread roundtrip
+  microbenchmark moves from ~3.0 ns to ~4.2 ns because the optimiser may no
+  longer reorder across it. Correctness on weakly ordered hardware is worth it,
+  and the cross-thread path — where the crate is actually used — moves ~2.8%.
 - **Out-of-bounds atomic access in the `atomic-slots` payload copy.** The striped
   copy rounded the payload up to whole `AtomicU64` stripes, so for any `T` whose
   size is not a multiple of 8 — `u8`, `u16`, `u32`, and most structs — the final

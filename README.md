@@ -292,8 +292,11 @@ Photon Ring offers two slot implementations, selectable at compile time:
 > stamp re-check — the same barrier the Linux kernel's `read_seqcount_retry()`
 > carries as `smp_rmb()`. Without it an acquire *load* is one-way and a weakly
 > ordered CPU may satisfy the payload read after the re-check has validated,
-> which would return data from a later overwrite. It is a no-op on x86, where TSO
-> orders load-load already.
+> which would return data from a later overwrite. On x86 the fence emits no
+> instruction — TSO already orders load-load — but it is still a compiler
+> barrier, and measured at roughly +1.2 ns on the same-thread roundtrip
+> microbenchmark because it forbids reordering the optimiser was otherwise
+> free to do. That is the price of the guarantee, on every architecture.
 >
 > With that fence in place, the default volatile implementation produces correct
 > results on real hardware; what remains is that it is a data race under Rust's
