@@ -1,9 +1,9 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::errors::PublishError;
 use crate::pod::Pod;
-use crate::ring::SharedRing;
+use crate::ring::{RingIndex, SharedRing};
 use crate::slot::Slot;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -20,14 +20,8 @@ pub struct Publisher<T: Pod> {
     /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the
     /// hot path. Valid for the lifetime of `ring` (the Arc keeps it alive).
     pub(super) slots_ptr: *const Slot<T>,
-    /// Cached ring capacity. Immutable after construction.
-    pub(super) capacity: u64,
-    /// Cached ring mask (`capacity - 1`). Used for pow2 fast path.
-    pub(super) mask: u64,
-    /// Precomputed Lemire reciprocal for arbitrary-capacity fastmod.
-    pub(super) reciprocal: u64,
-    /// True if capacity is a power of two (AND instead of fastmod).
-    pub(super) is_pow2: bool,
+    /// Precomputed slot indexing (capacity, mask, reciprocal, pow2 flag).
+    pub(super) index: RingIndex,
     /// Cached raw pointer to `ring.cursor.0`. Avoids Arc deref on hot path.
     pub(super) cursor_ptr: *const AtomicU64,
     pub(super) seq: u64,
@@ -42,24 +36,6 @@ pub struct Publisher<T: Pod> {
 unsafe impl<T: Pod> Send for Publisher<T> {}
 
 impl<T: Pod> Publisher<T> {
-    /// Map a sequence number to a slot index.
-    ///
-    /// Power-of-two: bitwise AND (~0.3 ns). Arbitrary: reciprocal multiply (~1.5 ns).
-    /// The branch is perfectly predicted (always the same direction after warmup).
-    #[inline(always)]
-    fn slot_index(&self, seq: u64) -> usize {
-        if self.is_pow2 {
-            (seq & self.mask) as usize
-        } else {
-            let q = ((seq as u128 * self.reciprocal as u128) >> 64) as u64;
-            let mut r = seq - q.wrapping_mul(self.capacity);
-            if r >= self.capacity {
-                r -= self.capacity;
-            }
-            r as usize
-        }
-    }
-
     /// Spin-wait until backpressure allows publishing.
     ///
     /// On a bounded channel, this blocks until the slowest subscriber has
@@ -70,27 +46,32 @@ impl<T: Pod> Publisher<T> {
         if !self.has_backpressure {
             return;
         }
-        loop {
-            if let Some(bp) = self.ring.backpressure.as_ref() {
-                let capacity = self.ring.capacity();
-                let effective = capacity - bp.watermark;
-                if self.seq >= self.cached_slowest + effective {
-                    match self.ring.slowest_cursor() {
-                        Some(slowest) => {
-                            self.cached_slowest = slowest;
-                            if self.seq >= slowest + effective {
-                                core::hint::spin_loop();
-                                continue;
-                            }
-                        }
-                        None => {
-                            // No subscribers registered yet — ring is unbounded.
-                        }
-                    }
+        while !self.has_room() {
+            core::hint::spin_loop();
+        }
+    }
+
+    /// Whether the current `seq` can be published without lapping the slowest
+    /// subscriber (accounting for the watermark). Always `true` on a lossy
+    /// channel. Refreshes `cached_slowest` as a side effect when it rescans.
+    #[inline]
+    fn has_room(&mut self) -> bool {
+        let effective = match self.ring.backpressure.as_ref() {
+            Some(bp) => self.ring.capacity() - bp.watermark,
+            None => return true,
+        };
+        // Fast path: trust the cached slowest cursor until it says we're close.
+        if self.seq >= self.cached_slowest + effective {
+            // Slow path: rescan all trackers. `None` means no subscribers yet,
+            // so the ring is effectively unbounded — room available.
+            if let Some(slowest) = self.ring.slowest_cursor() {
+                self.cached_slowest = slowest;
+                if self.seq >= slowest + effective {
+                    return false;
                 }
             }
-            break;
         }
+        true
     }
 
     /// Write a single value to the ring without any backpressure check.
@@ -99,9 +80,9 @@ impl<T: Pod> Publisher<T> {
     #[inline]
     fn publish_unchecked(&mut self, value: T) {
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
-        // Index is computed via slot_index to stay within the allocated slot array.
-        let slot = unsafe { &*self.slots_ptr.add(self.slot_index(self.seq)) };
-        prefetch_write_next(self.slots_ptr, self.slot_index(self.seq + 1) as u64);
+        // Index stays within the allocated slot array via RingIndex::slot.
+        let slot = unsafe { &*self.slots_ptr.add(self.index.slot(self.seq)) };
+        prefetch_write_next(self.slots_ptr, self.index.slot(self.seq + 1) as u64);
         slot.write(self.seq, value);
         // SAFETY: cursor_ptr points to ring.cursor.0, kept alive by self.ring.
         unsafe { &*self.cursor_ptr }.store(self.seq, Ordering::Release);
@@ -131,8 +112,8 @@ impl<T: Pod> Publisher<T> {
     pub fn publish_with(&mut self, f: impl FnOnce(&mut core::mem::MaybeUninit<T>)) {
         self.wait_for_backpressure();
         // SAFETY: see publish_unchecked.
-        let slot = unsafe { &*self.slots_ptr.add(self.slot_index(self.seq)) };
-        prefetch_write_next(self.slots_ptr, self.slot_index(self.seq + 1) as u64);
+        let slot = unsafe { &*self.slots_ptr.add(self.index.slot(self.seq)) };
+        prefetch_write_next(self.slots_ptr, self.index.slot(self.seq + 1) as u64);
         slot.write_with(self.seq, f);
         unsafe { &*self.cursor_ptr }.store(self.seq, Ordering::Release);
         self.seq += 1;
@@ -171,25 +152,8 @@ impl<T: Pod> Publisher<T> {
     ///   `Err(PublishError::Full(value))` without writing.
     #[inline]
     pub fn try_publish(&mut self, value: T) -> Result<(), PublishError<T>> {
-        if let Some(bp) = self.ring.backpressure.as_ref() {
-            let capacity = self.ring.capacity();
-            let effective = capacity - bp.watermark;
-
-            // Fast path: use cached slowest cursor.
-            if self.seq >= self.cached_slowest + effective {
-                // Slow path: rescan all trackers.
-                match self.ring.slowest_cursor() {
-                    Some(slowest) => {
-                        self.cached_slowest = slowest;
-                        if self.seq >= slowest + effective {
-                            return Err(PublishError::Full(value));
-                        }
-                    }
-                    None => {
-                        // No subscribers registered yet — ring is unbounded.
-                    }
-                }
-            }
+        if !self.has_room() {
+            return Err(PublishError::Full(value));
         }
         self.publish_unchecked(value);
         Ok(())

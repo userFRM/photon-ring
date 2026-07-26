@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! # Cross-core PREFETCHW validation benchmark
 //!
@@ -67,7 +67,7 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -214,90 +214,6 @@ fn bench_pinned_throughput(
             },
         );
     }
-
-    group.finish();
-}
-
-// ---------------------------------------------------------------------------
-// One-way latency distribution: cycles from RDTSCP stamp to consumer receipt
-// ---------------------------------------------------------------------------
-//
-// Embeds RDTSCP in the payload, consumer measures delta on receipt.
-// We collect 200k samples and report percentile distribution.
-// This is the most physically meaningful measurement — it tells you exactly
-// how long one cache line transfer takes across the MESI state machine.
-
-#[allow(dead_code)]
-fn bench_one_way_latency(
-    c: &mut Criterion,
-    group_name: &str,
-    publisher_cpu: usize,
-    reader_cpu: usize,
-) {
-    let mut group = c.benchmark_group(group_name);
-    group.measurement_time(Duration::from_secs(10));
-    group.warm_up_time(Duration::from_secs(2));
-    group.sample_size(100);
-    group.throughput(Throughput::Elements(1));
-
-    group.bench_function("one_way_latency_ns", |b| {
-        let (mut pub_, subs) = photon_ring::channel::<TscMsg>(4096);
-        let mut sub = subs.subscribe();
-
-        let done = Arc::new(AtomicBool::new(false));
-        let latency_sum = Arc::new(AtomicU64::new(0));
-        let latency_count = Arc::new(AtomicU64::new(0));
-        let done2 = done.clone();
-        let sum2 = latency_sum.clone();
-        let count2 = latency_count.clone();
-
-        let reader = std::thread::Builder::new()
-            .name(format!("latency-reader-cpu{reader_cpu}"))
-            .spawn(move || {
-                pin_to_cpu(reader_cpu);
-                while !done2.load(Ordering::Relaxed) {
-                    if let Ok(msg) = sub.try_recv() {
-                        // LFENCE+RDTSC immediately on receipt — earliest
-                        // possible arrival timestamp
-                        let now = rdtsc_fenced();
-                        if now > msg.tsc {
-                            let delta_cycles = now - msg.tsc;
-                            // Convert cycles → ns at 3.8 GHz base
-                            // (invariant TSC on i7-10700KF runs at base frequency)
-                            let delta_ns = (delta_cycles * 1000) / 3_800; // integer ns
-                            sum2.fetch_add(delta_ns, Ordering::Relaxed);
-                            count2.fetch_add(1, Ordering::Relaxed);
-                        }
-                    } else {
-                        core::hint::spin_loop();
-                    }
-                }
-            })
-            .expect("failed to spawn latency reader");
-
-        pin_to_cpu(publisher_cpu);
-
-        let mut seq = 0u64;
-        b.iter(|| {
-            let tsc = rdtscp();
-            pub_.publish(TscMsg { tsc, seq });
-            seq = seq.wrapping_add(1);
-            // Brief throttle to avoid lapping the 4096-slot ring
-            core::hint::spin_loop();
-        });
-
-        done.store(true, Ordering::Relaxed);
-        reader.join().unwrap();
-
-        let count = latency_count.load(Ordering::Relaxed);
-        let sum = latency_sum.load(Ordering::Relaxed);
-        if count > 0 {
-            let mean_ns = sum / count;
-            // Emit as a custom value so it appears in output
-            // (Criterion will show it in the report)
-            eprintln!("\n[{group_name}] one-way latency: mean={mean_ns}ns over {count} samples");
-        }
-    });
 
     group.finish();
 }

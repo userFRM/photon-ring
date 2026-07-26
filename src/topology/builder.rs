@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::channel::{self, Publisher, Subscribable, Subscriber};
 use crate::pod::Pod;
@@ -7,7 +7,7 @@ use crate::wait::WaitStrategy;
 
 use super::fan_out::FanOutBuilder;
 use super::pipeline::Pipeline;
-use super::{spawn_stage, SharedState, DEFAULT_CAPACITY};
+use super::{SharedState, DEFAULT_CAPACITY};
 
 // ---------------------------------------------------------------------------
 // PipelineBuilder
@@ -156,19 +156,9 @@ impl<T: Pod> StageBuilder<T> {
         f: impl Fn(T) -> U + Send + 'static,
         strategy: WaitStrategy,
     ) -> StageBuilder<U> {
-        let (next_pub, next_subs) = channel::channel::<U>(self.capacity);
-        let next_sub = next_subs.subscribe();
-
-        let (status, handle) = spawn_stage(
-            self.subscriber,
-            next_pub,
-            self.state.shutdown.clone(),
-            f,
-            strategy,
-        );
-        self.state.handles.push(handle);
-        self.state.statuses.push(status);
-
+        let (next_sub, next_subs) =
+            self.state
+                .add_stage(self.subscriber, self.capacity, f, strategy);
         StageBuilder {
             subscriber: next_sub,
             subscribable: next_subs,
@@ -215,36 +205,14 @@ impl<T: Pod> StageBuilder<T> {
         A: Pod,
         B: Pod,
     {
-        let (pub_a, subs_a) = channel::channel::<A>(self.capacity);
-        let (pub_b, subs_b) = channel::channel::<B>(self.capacity);
-        let sub_a_out = subs_a.subscribe();
-        let sub_b_out = subs_b.subscribe();
-
-        // Branch A uses the existing subscriber.
-        let input_a = self.subscriber;
-        // Branch B gets a fresh subscriber from the same source ring.
+        // Branch B gets a fresh subscriber from the same source ring; branch A
+        // reuses the existing one.
         let input_b = self.subscribable.subscribe();
-
-        let default_strategy = WaitStrategy::default();
-        let (status_a, handle_a) = spawn_stage(
-            input_a,
-            pub_a,
-            self.state.shutdown.clone(),
-            fa,
-            default_strategy,
-        );
-        let (status_b, handle_b) = spawn_stage(
-            input_b,
-            pub_b,
-            self.state.shutdown.clone(),
-            fb,
-            default_strategy,
-        );
-
-        self.state.handles.push(handle_a);
-        self.state.handles.push(handle_b);
-        self.state.statuses.push(status_a);
-        self.state.statuses.push(status_b);
+        let strategy = WaitStrategy::default();
+        let (sub_a_out, subs_a) =
+            self.state
+                .add_stage(self.subscriber, self.capacity, fa, strategy);
+        let (sub_b_out, subs_b) = self.state.add_stage(input_b, self.capacity, fb, strategy);
 
         FanOutBuilder {
             sub_a: sub_a_out,
@@ -263,13 +231,6 @@ impl<T: Pod> StageBuilder<T> {
     /// directly from the input channel if no stages were added).
     /// The pipeline handle is used for shutdown and health monitoring.
     pub fn build(self) -> (Subscriber<T>, Pipeline) {
-        (
-            self.subscriber,
-            Pipeline {
-                handles: self.state.handles,
-                shutdown: self.state.shutdown,
-                statuses: self.state.statuses,
-            },
-        )
+        (self.subscriber, self.state.into())
     }
 }

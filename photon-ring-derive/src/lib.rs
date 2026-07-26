@@ -1,11 +1,12 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Derive macros for [`photon_ring::Pod`] and [`photon_ring::Message`].
 //!
 //! ## `Pod` derive
 //!
 //! ```ignore
+//! #[repr(C)]
 //! #[derive(photon_ring::Pod)]
 //! struct Quote {
 //!     price: f64,
@@ -33,8 +34,10 @@
 //! }
 //! ```
 //!
-//! Generates a Pod-compatible wire struct (`OrderWire`) plus `From`
-//! conversions in both directions. See [`derive_message`] for details.
+//! Generates a Pod-compatible wire struct (`OrderWire`), a `From<Order> for
+//! OrderWire`, and a back-conversion: a safe `From<OrderWire> for Order` for
+//! enum-free structs, or an `unsafe OrderWire::into_domain()` method when
+//! `#[photon(as_enum)]` fields are present. See [`derive_message`] for details.
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -54,6 +57,7 @@ use syn::{
 /// # Example
 ///
 /// ```ignore
+/// #[repr(C)]
 /// #[derive(photon_ring::Pod)]
 /// struct Tick {
 ///     price: f64,
@@ -144,28 +148,18 @@ enum FieldKind {
     Usize,
     /// `isize` → `i64`.
     Isize,
-    /// `Option<T>` where T is an unsigned ≤64-bit integer type (u8, u16, u32, u64).
-    /// Wire struct gets two fields: `X_value: u64` and `X_has: u8`.
-    /// Stores the inner type for the back-conversion cast.
-    OptionUnsignedInt(Type),
-    /// `Option<T>` where T is a signed ≤64-bit integer type (i8, i16, i32, i64).
-    /// Wire struct gets two fields: `X_value: i64` and `X_has: u8`.
-    /// Stores the inner type for the back-conversion cast.
-    OptionSignedInt(Type),
-    /// `Option<bool>` — wire struct gets `X_value: u8` and `X_has: u8`.
-    OptionBool,
-    /// `Option<u128>` — wire struct gets `X_value: u128` and `X_has: u8`.
-    OptionU128,
-    /// `Option<i128>` — wire struct gets `X_value: u128` and `X_has: u8`.
-    OptionI128,
-    /// `Option<usize>` — wire struct gets `X_value: u64` and `X_has: u8`.
-    OptionUsize,
-    /// `Option<isize>` — wire struct gets `X_value: i64` and `X_has: u8`.
-    OptionIsize,
-    /// `Option<f32>` — wire struct gets `X_value: u32` (bit-encoded) and `X_has: u8`.
-    OptionF32,
-    /// `Option<f64>` — wire struct gets `X_value: u64` (bit-encoded) and `X_has: u8`.
-    OptionF64,
+    /// `Option<T>` for a supported inner type. The wire struct gets a
+    /// `X_value: <wire_ty>` field plus a `X_has: u8` presence flag. The two
+    /// conversion snippets carry the per-type detail: `to_value` maps the
+    /// unwrapped `v` to the wire integer, `from_value` maps the loaded `raw`
+    /// wire integer back to the inner type.
+    Option {
+        wire_ty: proc_macro2::TokenStream,
+        to_value: proc_macro2::TokenStream,
+        from_value: proc_macro2::TokenStream,
+        /// `usize`/`isize` inner types need the 64-bit-fit compile assertion.
+        is_usize_isize: bool,
+    },
     /// A `#[repr(u8)]` enum, explicitly marked with `#[photon(as_enum)]` → `u8`.
     Enum,
     /// Unrecognized type — will emit a compile error.
@@ -211,19 +205,47 @@ fn classify(ty: &Type) -> FieldKind {
                     if let PathArguments::AngleBracketed(args) = &seg.arguments {
                         if let Some(GenericArgument::Type(inner)) = args.args.first() {
                             let name = type_name(inner).unwrap_or_default();
+                            let opt =
+                                |wire_ty, to_value, from_value, is_usize_isize| FieldKind::Option {
+                                    wire_ty,
+                                    to_value,
+                                    from_value,
+                                    is_usize_isize,
+                                };
                             return match name.as_str() {
-                                "bool" => FieldKind::OptionBool,
-                                "f32" => FieldKind::OptionF32,
-                                "f64" => FieldKind::OptionF64,
-                                "u128" => FieldKind::OptionU128,
-                                "i128" => FieldKind::OptionI128,
-                                "usize" => FieldKind::OptionUsize,
-                                "isize" => FieldKind::OptionIsize,
+                                "bool" => opt(
+                                    quote!(u8),
+                                    quote!(if v { 1 } else { 0 }),
+                                    quote!(raw != 0),
+                                    false,
+                                ),
+                                "f32" => opt(
+                                    quote!(u32),
+                                    quote!(v.to_bits()),
+                                    quote!(f32::from_bits(raw)),
+                                    false,
+                                ),
+                                "f64" => opt(
+                                    quote!(u64),
+                                    quote!(v.to_bits()),
+                                    quote!(f64::from_bits(raw)),
+                                    false,
+                                ),
+                                "u128" => opt(quote!(u128), quote!(v), quote!(raw), false),
+                                "i128" => {
+                                    opt(quote!(u128), quote!(v as u128), quote!(raw as i128), false)
+                                }
+                                "usize" => {
+                                    opt(quote!(u64), quote!(v as u64), quote!(raw as usize), true)
+                                }
+                                "isize" => {
+                                    opt(quote!(i64), quote!(v as i64), quote!(raw as isize), true)
+                                }
                                 "u8" | "u16" | "u32" | "u64" => {
-                                    FieldKind::OptionUnsignedInt(inner.clone())
+                                    opt(quote!(u64), quote!(v as u64), quote!(raw as #inner), false)
                                 }
                                 "i8" | "i16" | "i32" | "i64" => {
-                                    FieldKind::OptionSignedInt(inner.clone())
+                                    opt(quote!(i64), quote!(v as i64), quote!(raw as #inner), false)
                                 }
                                 _ => FieldKind::UnsupportedOption(name),
                             };
@@ -386,14 +408,22 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
                 to_wire.push(quote! { #fname: src.#fname as i64 });
                 from_wire.push(quote! { #fname: src.#fname as isize });
             }
-            FieldKind::OptionUnsignedInt(inner) => {
+            FieldKind::Option {
+                wire_ty,
+                to_value,
+                from_value,
+                is_usize_isize,
+            } => {
+                if is_usize_isize {
+                    has_usize_isize = true;
+                }
                 let value_field = format_ident!("{}_value", fname);
                 let has_field = format_ident!("{}_has", fname);
-                wire_fields.push(quote! { pub #value_field: u64 });
+                wire_fields.push(quote! { pub #value_field: #wire_ty });
                 wire_fields.push(quote! { pub #has_field: u8 });
                 to_wire.push(quote! {
                     #value_field: match src.#fname {
-                        Some(v) => v as u64,
+                        Some(v) => #to_value,
                         None => 0,
                     }
                 });
@@ -402,185 +432,8 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
                 });
                 from_wire.push(quote! {
                     #fname: if src.#has_field != 0 {
-                        Some(src.#value_field as #inner)
-                    } else {
-                        None
-                    }
-                });
-            }
-            FieldKind::OptionSignedInt(inner) => {
-                let value_field = format_ident!("{}_value", fname);
-                let has_field = format_ident!("{}_has", fname);
-                wire_fields.push(quote! { pub #value_field: i64 });
-                wire_fields.push(quote! { pub #has_field: u8 });
-                to_wire.push(quote! {
-                    #value_field: match src.#fname {
-                        Some(v) => v as i64,
-                        None => 0,
-                    }
-                });
-                to_wire.push(quote! {
-                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
-                });
-                from_wire.push(quote! {
-                    #fname: if src.#has_field != 0 {
-                        Some(src.#value_field as #inner)
-                    } else {
-                        None
-                    }
-                });
-            }
-            FieldKind::OptionBool => {
-                let value_field = format_ident!("{}_value", fname);
-                let has_field = format_ident!("{}_has", fname);
-                wire_fields.push(quote! { pub #value_field: u8 });
-                wire_fields.push(quote! { pub #has_field: u8 });
-                to_wire.push(quote! {
-                    #value_field: match src.#fname {
-                        Some(v) => if v { 1 } else { 0 },
-                        None => 0,
-                    }
-                });
-                to_wire.push(quote! {
-                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
-                });
-                from_wire.push(quote! {
-                    #fname: if src.#has_field != 0 {
-                        Some(src.#value_field != 0)
-                    } else {
-                        None
-                    }
-                });
-            }
-            FieldKind::OptionU128 => {
-                let value_field = format_ident!("{}_value", fname);
-                let has_field = format_ident!("{}_has", fname);
-                wire_fields.push(quote! { pub #value_field: u128 });
-                wire_fields.push(quote! { pub #has_field: u8 });
-                to_wire.push(quote! {
-                    #value_field: match src.#fname {
-                        Some(v) => v,
-                        None => 0,
-                    }
-                });
-                to_wire.push(quote! {
-                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
-                });
-                from_wire.push(quote! {
-                    #fname: if src.#has_field != 0 {
-                        Some(src.#value_field)
-                    } else {
-                        None
-                    }
-                });
-            }
-            FieldKind::OptionI128 => {
-                let value_field = format_ident!("{}_value", fname);
-                let has_field = format_ident!("{}_has", fname);
-                wire_fields.push(quote! { pub #value_field: u128 });
-                wire_fields.push(quote! { pub #has_field: u8 });
-                to_wire.push(quote! {
-                    #value_field: match src.#fname {
-                        Some(v) => v as u128,
-                        None => 0,
-                    }
-                });
-                to_wire.push(quote! {
-                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
-                });
-                from_wire.push(quote! {
-                    #fname: if src.#has_field != 0 {
-                        Some(src.#value_field as i128)
-                    } else {
-                        None
-                    }
-                });
-            }
-            FieldKind::OptionUsize => {
-                has_usize_isize = true;
-                let value_field = format_ident!("{}_value", fname);
-                let has_field = format_ident!("{}_has", fname);
-                wire_fields.push(quote! { pub #value_field: u64 });
-                wire_fields.push(quote! { pub #has_field: u8 });
-                to_wire.push(quote! {
-                    #value_field: match src.#fname {
-                        Some(v) => v as u64,
-                        None => 0,
-                    }
-                });
-                to_wire.push(quote! {
-                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
-                });
-                from_wire.push(quote! {
-                    #fname: if src.#has_field != 0 {
-                        Some(src.#value_field as usize)
-                    } else {
-                        None
-                    }
-                });
-            }
-            FieldKind::OptionIsize => {
-                has_usize_isize = true;
-                let value_field = format_ident!("{}_value", fname);
-                let has_field = format_ident!("{}_has", fname);
-                wire_fields.push(quote! { pub #value_field: i64 });
-                wire_fields.push(quote! { pub #has_field: u8 });
-                to_wire.push(quote! {
-                    #value_field: match src.#fname {
-                        Some(v) => v as i64,
-                        None => 0,
-                    }
-                });
-                to_wire.push(quote! {
-                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
-                });
-                from_wire.push(quote! {
-                    #fname: if src.#has_field != 0 {
-                        Some(src.#value_field as isize)
-                    } else {
-                        None
-                    }
-                });
-            }
-            FieldKind::OptionF32 => {
-                let value_field = format_ident!("{}_value", fname);
-                let has_field = format_ident!("{}_has", fname);
-                wire_fields.push(quote! { pub #value_field: u32 });
-                wire_fields.push(quote! { pub #has_field: u8 });
-                to_wire.push(quote! {
-                    #value_field: match src.#fname {
-                        Some(v) => v.to_bits(),
-                        None => 0,
-                    }
-                });
-                to_wire.push(quote! {
-                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
-                });
-                from_wire.push(quote! {
-                    #fname: if src.#has_field != 0 {
-                        Some(f32::from_bits(src.#value_field))
-                    } else {
-                        None
-                    }
-                });
-            }
-            FieldKind::OptionF64 => {
-                let value_field = format_ident!("{}_value", fname);
-                let has_field = format_ident!("{}_has", fname);
-                wire_fields.push(quote! { pub #value_field: u64 });
-                wire_fields.push(quote! { pub #has_field: u8 });
-                to_wire.push(quote! {
-                    #value_field: match src.#fname {
-                        Some(v) => v.to_bits(),
-                        None => 0,
-                    }
-                });
-                to_wire.push(quote! {
-                    #has_field: if src.#fname.is_some() { 1 } else { 0 }
-                });
-                from_wire.push(quote! {
-                    #fname: if src.#has_field != 0 {
-                        Some(f64::from_bits(src.#value_field))
+                        let raw = src.#value_field;
+                        Some(#from_value)
                     } else {
                         None
                     }

@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::group::SubscriberGroup;
 use super::subscriber::Subscriber;
@@ -38,10 +38,7 @@ impl<T: Pod> Subscribable<T> {
         Subscriber {
             ring: self.ring.clone(),
             slots_ptr,
-            capacity: idx.capacity,
-            mask: idx.mask,
-            reciprocal: idx.reciprocal,
-            is_pow2: idx.is_pow2,
+            index: idx,
             cursor: start,
             tracker,
             total_lagged: 0,
@@ -69,10 +66,7 @@ impl<T: Pod> Subscribable<T> {
         SubscriberGroup {
             ring: self.ring.clone(),
             slots_ptr,
-            capacity: idx.capacity,
-            mask: idx.mask,
-            reciprocal: idx.reciprocal,
-            is_pow2: idx.is_pow2,
+            index: idx,
             cursor: start,
             total_lagged: 0,
             total_received: 0,
@@ -98,10 +92,7 @@ impl<T: Pod> Subscribable<T> {
         Subscriber {
             ring: self.ring.clone(),
             slots_ptr,
-            capacity: idx.capacity,
-            mask: idx.mask,
-            reciprocal: idx.reciprocal,
-            is_pow2: idx.is_pow2,
+            index: idx,
             cursor: start,
             tracker,
             total_lagged: 0,
@@ -138,10 +129,7 @@ impl<T: Pod> Subscribable<T> {
         Subscriber {
             ring: self.ring.clone(),
             slots_ptr,
-            capacity: idx.capacity,
-            mask: idx.mask,
-            reciprocal: idx.reciprocal,
-            is_pow2: idx.is_pow2,
+            index: idx,
             cursor: start,
             tracker,
             total_lagged: 0,

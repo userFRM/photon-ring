@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Observability wrappers for photon-ring channels.
 //!
@@ -71,7 +71,7 @@ impl core::fmt::Display for SubscriberSnapshot {
 pub struct PublisherSnapshot {
     /// Total messages published so far.
     pub published: u64,
-    /// Ring capacity (power of two).
+    /// Ring capacity.
     pub capacity: u64,
 }
 

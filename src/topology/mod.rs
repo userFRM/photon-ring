@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Builder-pattern topology for multi-stage processing pipelines.
 //!
@@ -73,7 +73,7 @@ pub use builder::{PipelineBuilder, StageBuilder};
 pub use fan_out::FanOutBuilder;
 pub use pipeline::Pipeline;
 
-use crate::channel::{Publisher, Subscriber};
+use crate::channel::{Publisher, Subscribable, Subscriber};
 use crate::pod::Pod;
 use crate::wait::WaitStrategy;
 use alloc::sync::Arc;
@@ -96,11 +96,12 @@ const STAGE_PANICKED: u8 = 2;
 // Shared internals carried through the builder chain
 // ---------------------------------------------------------------------------
 
-/// Shared state accumulated during pipeline construction.
+/// Build-time state moved through the builder chain and into the finished
+/// [`Pipeline`].
 ///
-/// Uses `Arc` so the same instance is shared between the builder chain
-/// and the spawned stage threads. The `Mutex` is only held briefly
-/// during `push` (build-time) and `iter` (query-time).
+/// Nothing here is lock-protected. Only the per-stage handles are shared with
+/// their threads: `shutdown` (an `Arc<AtomicBool>` cloned into each stage) and
+/// each `statuses` entry (an `Arc<AtomicU8>` the stage stores its status into).
 struct SharedState {
     shutdown: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,
@@ -113,6 +114,35 @@ impl SharedState {
             shutdown: Arc::new(AtomicBool::new(false)),
             handles: Vec::new(),
             statuses: Vec::new(),
+        }
+    }
+
+    /// Spawn one processing stage: create its output channel, wire
+    /// `input -> f -> output` on a dedicated thread, and record the handle
+    /// and status. Returns the output subscriber plus its subscribable (the
+    /// latter lets a fan-out branch attach further subscribers to the ring).
+    fn add_stage<T: Pod, U: Pod>(
+        &mut self,
+        input: Subscriber<T>,
+        capacity: usize,
+        f: impl Fn(T) -> U + Send + 'static,
+        strategy: WaitStrategy,
+    ) -> (Subscriber<U>, Subscribable<U>) {
+        let (next_pub, next_subs) = crate::channel::channel::<U>(capacity);
+        let next_sub = next_subs.subscribe();
+        let (status, handle) = spawn_stage(input, next_pub, self.shutdown.clone(), f, strategy);
+        self.handles.push(handle);
+        self.statuses.push(status);
+        (next_sub, next_subs)
+    }
+}
+
+impl From<SharedState> for Pipeline {
+    fn from(state: SharedState) -> Self {
+        Pipeline {
+            handles: state.handles,
+            shutdown: state.shutdown,
+            statuses: state.statuses,
         }
     }
 }

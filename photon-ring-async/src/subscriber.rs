@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::DEFAULT_SPIN_BUDGET;
 use core::future::Future;
@@ -211,7 +211,3 @@ impl<'a, T: Pod> Future for RecvFuture<'a, T> {
         self.sub.poll_recv(cx)
     }
 }
-
-// SAFETY: AsyncSubscriber<T> is Send because Subscriber<T> is Send and
-// spin_budget is a plain u32.
-unsafe impl<T: Pod> Send for AsyncSubscriber<T> {}

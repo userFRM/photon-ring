@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! A shared shutdown signal for coordinating graceful termination of
 //! consumer loops.
@@ -27,6 +27,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 /// shutdown.trigger();
 /// assert!(flag.is_shutdown());
 /// ```
+#[derive(Clone)]
 pub struct Shutdown {
     flag: Arc<AtomicBool>,
 }
@@ -53,13 +54,5 @@ impl Shutdown {
 impl Default for Shutdown {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Clone for Shutdown {
-    fn clone(&self) -> Self {
-        Shutdown {
-            flag: self.flag.clone(),
-        }
     }
 }

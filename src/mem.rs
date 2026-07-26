@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Platform-specific memory control for ring buffer allocation.
 //!
@@ -91,13 +91,12 @@ pub fn set_numa_preferred(node: usize) -> bool {
     }
     // MPOL_PREFERRED = 1: prefer the specified node, fall back to others.
     let nodemask: libc::c_ulong = 1u64.wrapping_shl(node as u32) as libc::c_ulong;
-    let maxnode = core::mem::size_of::<libc::c_ulong>() * 8;
     unsafe {
         libc::syscall(
             libc::SYS_set_mempolicy,
             1i32, // MPOL_PREFERRED
             &nodemask as *const libc::c_ulong,
-            maxnode as libc::c_ulong,
+            max_node as libc::c_ulong,
         ) == 0
     }
 }

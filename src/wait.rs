@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Wait strategies for blocking receive operations.
 //!
@@ -12,6 +12,7 @@
 //! | `YieldSpin` | Low (~30 ns on x86) | High | Shared cores, SMT |
 //! | `BackoffSpin` | Medium (exponential) | Decreasing | Background consumers |
 //! | `Adaptive` | Auto-scaling | Varies | General purpose |
+//! | `MonitorWait` | Near-zero (~30 ns on Intel) | Near-zero | Intel Alder Lake+ |
 //!
 //! # Platform-specific optimizations
 //!
@@ -25,10 +26,9 @@
 //! On **x86/x86_64**, `core::hint::spin_loop()` emits `PAUSE`, which is the
 //! standard spin-wait hint (~140 cycles on Skylake+).
 //!
-// NOTE: Intel Tremont+ CPUs support UMWAIT/TPAUSE instructions for
-// user-mode cache line monitoring. These would allow near-zero latency
-// wakeup without burning CPU. Not yet implemented — requires CPUID
-// feature detection (WAITPKG) and is only available on recent Intel.
+//! On recent Intel (Alder Lake+), the `MonitorWait` / `MonitorWaitFallback`
+//! strategies use `UMONITOR`/`UMWAIT`/`TPAUSE` for near-zero-power wakeup,
+//! gated at runtime on the `WAITPKG` CPUID feature.
 
 /// Strategy for blocking `recv()` and `SubscriberGroup::recv()`.
 ///
@@ -187,10 +187,7 @@ mod umwait {
     /// The deadline is a safety bound, not a precision target.
     #[inline(always)]
     fn deadline_100us() -> (u32, u32) {
-        // Use _rdtsc() directly. The previous version had a dead inline-asm
-        // `rdtsc` block whose eax/edx outputs were discarded (bound to `_`),
-        // immediately followed by a second _rdtsc() call for the actual value.
-        // That wasted ~20–25 cycles per UMWAIT/TPAUSE call. Removed.
+        // Read the TSC once.
         let tsc = unsafe { core::arch::x86_64::_rdtsc() };
         let deadline = tsc.wrapping_add(300_000); // ~100µs at 3 GHz
         (deadline as u32, (deadline >> 32) as u32) // (eax, edx)

@@ -1,6 +1,6 @@
 <!--
   Copyright 2026 Photon Ring Contributors
-  SPDX-License-Identifier: Apache-2.0
+  SPDX-License-Identifier: MIT OR Apache-2.0
 -->
 
 # Photon Ring: Seqlock-Stamped Ring Buffers for Sub-100ns Inter-Thread Messaging

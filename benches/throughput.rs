@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
@@ -168,7 +168,11 @@ fn struct_roundtrip(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// Disruptor comparison benchmarks (apple-to-apple single-threaded roundtrip)
+// Disruptor comparison benchmarks.
+//
+// disruptor's `.build()` runs the event handler on its own thread, so the
+// roundtrip below (publish, then spin until the consumer thread processes it)
+// is inherently cross-thread — there is no same-thread mode to compare against.
 // ---------------------------------------------------------------------------
 
 fn disruptor_publish_only(c: &mut Criterion) {

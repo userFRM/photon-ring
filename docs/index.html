@@ -1,6 +1,6 @@
 <!--
   Copyright 2026 Photon Ring Contributors
-  SPDX-License-Identifier: Apache-2.0
+  SPDX-License-Identifier: MIT OR Apache-2.0
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -897,8 +897,8 @@ Write protocol:                Read protocol:
       <strong>disruptor-rs comparison note:</strong>
       Both libraries use BusySpin wait strategy and 4096-slot rings. The Disruptor
       benchmarks run in the same Criterion binary, compiled with identical flags.
-      Cross-thread Disruptor numbers are not available because its consumer thread
-      is managed internally by the builder API.
+      Disruptor's builder always runs the consumer on its own thread, so its roundtrip
+      is inherently cross-thread; there is no same-thread Disruptor row to compare against.
       See <a href="benchmark-methodology.html">benchmark methodology</a> for full details.
     </div>
 
@@ -967,8 +967,8 @@ Write protocol:                Read protocol:
     <!-- Payload scaling -->
     <h3 style="color:var(--text-bright);font-size:1rem;font-weight:600;margin-bottom:8px;">Payload scaling</h3>
     <p class="note-inline mb-16">
-      Photon Ring outperforms disruptor-rs at every payload size tested (8 B &ndash; 4 KiB).
-      See <a href="payload-scaling.html">full payload scaling analysis</a>.
+      Across 8 B &ndash; 4 KiB payloads, latency stays dominated by cross-core cache-coherence
+      transfer rather than the memcpy. See <a href="payload-scaling.html">full payload scaling analysis</a>.
     </p>
     <img
       class="payload-img"

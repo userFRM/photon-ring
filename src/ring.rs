@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::pod::Pod;
 use crate::slot::Slot;
@@ -64,6 +64,25 @@ impl RingIndex {
             mask,
             reciprocal,
             is_pow2,
+        }
+    }
+
+    /// Map a sequence number to a slot index.
+    ///
+    /// Power-of-two: bitwise AND (~0.3 ns). Arbitrary: reciprocal multiply
+    /// (~1.5 ns). The branch is perfectly predicted (always the same direction
+    /// after warmup).
+    #[inline(always)]
+    pub(crate) fn slot(&self, seq: u64) -> usize {
+        if self.is_pow2 {
+            (seq & self.mask) as usize
+        } else {
+            let q = ((seq as u128 * self.reciprocal as u128) >> 64) as u64;
+            let mut r = seq - q.wrapping_mul(self.capacity);
+            if r >= self.capacity {
+                r -= self.capacity;
+            }
+            r as usize
         }
     }
 }

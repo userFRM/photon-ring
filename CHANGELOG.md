@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (snapshot/delta tracking), `PublisherMetrics`. Framework-agnostic. 7 tests.
 - **Loom MPMC model tests:** Standalone loom model of the MPMC cursor advancement
   protocol. 4 scenarios covering 2-producer basic, contention, consumer reads,
-  and cursor catch-up. Run with `cargo test --test loom_mpmc --release`.
+  and cursor catch-up. Run with `RUSTFLAGS="--cfg loom" cargo test --test loom_mpmc --release`.
 
 ### Changed
 - `RingIndex` struct encapsulates capacity, mask, reciprocal, and is_pow2 flag.
@@ -70,9 +70,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one extra `DMB ISHLD` barrier in the reader path (~5-10ns). Miri-passable.
   `no_std` compatible. 8 new tests covering partial stripes, odd-sized payloads,
   cross-thread stress, MPMC, and bounded backpressure under atomic-slots.
-- **3 research documents** exploring seqlock alternatives via constraint-anchored
-  analysis (prohibition engine + impossibility proofs). All 3 independent agents
-  converged on the same design. See `docs/research-*.md`.
+- **Seqlock alternatives analysis** exploring sound alternatives to the
+  seqlock-stamped slot via constraint-anchored analysis (prohibition +
+  impossibility proofs), which informed the `atomic-slots` design.
 
 ## [2.3.0] - 2026-03-18
 
