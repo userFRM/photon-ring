@@ -120,6 +120,12 @@ impl<T> Slot<T> {
         }
     }
 
+    /// Raw pointer to the payload, for gated in-place reads.
+    #[inline]
+    pub(crate) fn value_ptr(&self) -> *const T {
+        self.value.get() as *const T
+    }
+
     /// Load the stamp with Acquire ordering. Used by MPMC catch-up to
     /// check whether a successor slot has been committed.
     #[inline]

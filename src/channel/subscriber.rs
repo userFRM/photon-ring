@@ -210,6 +210,36 @@ impl<T: Pod> Subscriber<T> {
         self.cursor
     }
 
+    /// Borrow the next message in place, without copying it out of the ring.
+    ///
+    /// Only available to a **tracked** subscriber on a **bounded** channel. There
+    /// the publisher refuses to advance past `slowest + capacity`, so the slot
+    /// this subscriber occupies provably cannot be rewritten while it is held —
+    /// which is what makes handing out a reference sound, and what lets the read
+    /// skip the seqlock validation a copying read needs.
+    ///
+    /// Returns `Err(TryRecvError::Empty)` if nothing is available, and panics if
+    /// called on a subscriber that does not gate the publisher, since there the
+    /// slot could be overwritten underfoot.
+    #[inline]
+    pub fn try_lease(&mut self) -> Result<Lease<'_, T>, TryRecvError> {
+        assert!(
+            self.tracker.is_some() && self.ring.backpressure.is_some(),
+            "try_lease requires a tracked subscriber on a bounded channel"
+        );
+        // Acquire pairs with the publisher's Release store of the cursor, so the
+        // payload written before it is visible to us. Gating does the rest.
+        let head = self.ring.cursor.0.load(Ordering::Acquire);
+        if head == u64::MAX || self.cursor > head {
+            return Err(TryRecvError::Empty);
+        }
+        let idx = self.index.slot(self.cursor);
+        // SAFETY: idx is in bounds; the slot is gated by this subscriber's
+        // tracker so the publisher cannot rewrite it before the lease drops.
+        let value = unsafe { (*self.slots_ptr.add(idx)).value_ptr() };
+        Ok(Lease { sub: self, value })
+    }
+
     /// How many messages are available to read (capped at ring capacity).
     #[inline]
     pub fn pending(&self) -> u64 {
@@ -466,5 +496,35 @@ impl<'a, T: Pod> Iterator for Drain<'a, T> {
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lease — an in-place borrow of a ring slot
+// ---------------------------------------------------------------------------
+
+/// A message borrowed in place from the ring. Advances the subscriber when
+/// dropped. See [`Subscriber::try_lease`].
+pub struct Lease<'a, T: Pod> {
+    sub: &'a mut Subscriber<T>,
+    value: *const T,
+}
+
+impl<T: Pod> core::ops::Deref for Lease<'_, T> {
+    type Target = T;
+    #[inline]
+    fn deref(&self) -> &T {
+        // SAFETY: the slot is gated by the subscriber's tracker for the lease's
+        // lifetime, so the publisher cannot rewrite it.
+        unsafe { &*self.value }
+    }
+}
+
+impl<T: Pod> Drop for Lease<'_, T> {
+    #[inline]
+    fn drop(&mut self) {
+        self.sub.cursor += 1;
+        self.sub.total_received += 1;
+        self.sub.update_tracker();
     }
 }

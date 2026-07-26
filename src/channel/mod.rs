@@ -15,7 +15,7 @@ pub use group::SubscriberGroup;
 pub use mp_publisher::MpPublisher;
 pub use publisher::Publisher;
 pub use subscribable::Subscribable;
-pub use subscriber::{Drain, Subscriber};
+pub use subscriber::{Drain, Lease, Subscriber};
 
 use crate::slot::Slot;
 
