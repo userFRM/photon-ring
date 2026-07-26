@@ -154,11 +154,6 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
 - **Sustained throughput:** about 300M msg/s on Intel and 88M msg/s on M1 Pro
 - **Payload scaling:** at cache-line-sized payloads the copy is a few percent of latency — cross-core cache-coherence transfer dominates. The copy only becomes co-dominant in the KiB range; see [`docs/payload-scaling.md`](docs/payload-scaling.md)
 
-## Coming from `disruptor-rs`?
-
-See [MIGRATION.md](MIGRATION.md) for a side-by-side port guide, the semantic
-differences that will affect your shutdown tests, and what the switch buys you.
-
 ## Degradation, not deadlock
 
 Backpressure exists so a consumer that must not lose messages can stop the

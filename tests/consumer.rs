@@ -1,8 +1,8 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Managed consumer behaviour, including the semantics a port from a
-//! barrier-based Disruptor depends on: batch signalling and drain-on-shutdown.
+//! Managed consumer behaviour: ordering, sequence numbering, batch signalling,
+//! drain-on-shutdown, and panic containment.
 
 use photon_ring::topology::{Consumer, DrainPolicy};
 use photon_ring::{channel_bounded, WaitStrategy};

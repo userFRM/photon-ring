@@ -22,9 +22,8 @@ use super::{STAGE_COMPLETED, STAGE_PANICKED, STAGE_RUNNING};
 /// What a consumer does with messages still buffered when it is asked to stop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrainPolicy {
-    /// Process everything already published before exiting. Matches the
-    /// shutdown behaviour of the LMAX Disruptor and its Rust port, where a
-    /// consumer drains to the last published sequence.
+    /// Process everything already published before exiting, so a clean
+    /// shutdown loses nothing that was accepted.
     Drain,
     /// Stop at the next poll, leaving buffered messages unprocessed.
     Immediate,
@@ -156,9 +155,10 @@ impl Drop for Consumer {
 /// Drain everything currently available, calling `f` with `end_of_batch` set on
 /// the final message. Returns how many were processed.
 ///
-/// The batch size is read once from `pending()`, so `end_of_batch` refers to the
-/// messages available when the batch started — the same meaning as the
-/// Disruptor's `available == sequence` test.
+/// The batch size is read once from `pending()`, so `end_of_batch` marks the
+/// last message of the batch that was available when the batch began. A handler
+/// accumulating work — buffering writes, batching an I/O flush — uses it as the
+/// signal to emit.
 #[inline]
 fn drain_batch<T: Pod>(sub: &mut Subscriber<T>, f: &mut impl FnMut(T, u64, bool)) -> u64 {
     let batch = sub.pending();
