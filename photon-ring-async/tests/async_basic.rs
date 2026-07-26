@@ -143,3 +143,22 @@ fn test_recv_future() {
         assert_eq!(value, 99);
     });
 }
+
+#[test]
+fn test_recv_batch_empty_buffer() {
+    // A zero-length buffer can hold nothing: recv_batch must report 0 without
+    // panicking, and without consuming a message it cannot store.
+    pollster::block_on(async {
+        let (mut pub_, subs) = photon_ring::channel::<u64>(64);
+        let mut async_sub = AsyncSubscriber::new(subs.subscribe());
+        let mut group = AsyncSubscriberGroup::<u64, 2>::new(subs.subscribe_group::<2>());
+        pub_.publish(7);
+
+        assert_eq!(async_sub.recv_batch(&mut []).await, 0);
+        assert_eq!(group.recv_batch(&mut []).await, 0);
+
+        // The message is still queued for both.
+        assert_eq!(async_sub.recv().await, 7);
+        assert_eq!(group.recv().await, 7);
+    });
+}

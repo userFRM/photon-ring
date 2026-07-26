@@ -96,6 +96,12 @@ impl<T: Pod> AsyncSubscriber<T> {
     }
 
     fn poll_recv_batch(&mut self, buf: &mut [T], cx: &mut Context<'_>) -> Poll<usize> {
+        // Nothing can be stored in a zero-length buffer, so return before the
+        // spin loop below — it would consume a message and then have nowhere
+        // to put it.
+        if buf.is_empty() {
+            return Poll::Ready(0);
+        }
         let count = self.inner.recv_batch(buf);
         if count > 0 {
             Poll::Ready(count)
