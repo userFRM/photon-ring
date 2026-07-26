@@ -28,6 +28,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Crate packages exclude `docs/`, `verification/`, and `scripts/`.
 
 ### Fixed
+- **Out-of-bounds atomic access in the `atomic-slots` payload copy.** The striped
+  copy rounded the payload up to whole `AtomicU64` stripes, so for any `T` whose
+  size is not a multiple of 8 — `u8`, `u16`, `u32`, and most structs — the final
+  stripe read and wrote up to 7 bytes past the payload's provenance. The bytes are
+  real (a slot is padded to its 64-byte alignment) so no miscompilation or
+  corruption was observed in practice, but it is undefined behavior under the Rust
+  abstract machine, which is precisely what this feature exists to avoid. The tail
+  now steps down through `AtomicU32`/`AtomicU16`/`AtomicU8`, keeping every access
+  in bounds with no change to slot layout and no extra operations in the common
+  cases. Found by running Miri against the feature for the first time.
+- **Documented the padding requirement for `atomic-slots`.** A payload with
+  implicit padding — `(u8, u64)` has 7 such bytes, reachable through the crate's
+  own blanket tuple impls — leaves those bytes uninitialized, and reading them as
+  part of an atomic word is undefined regardless of the fix above. `Pod`'s safety
+  contract now states the no-padding requirement explicitly, and the feature's
+  soundness claim is scoped to padding-free payloads. Enforcing this at compile
+  time requires tightening the `Pod` contract and is deferred to a major release.
+- **`atomic-slots` is now covered by Miri in CI** (`miri (atomic-slots)` job). The
+  existing `miri` job runs the default volatile slots single-threaded with all
+  cross-thread tests skipped, so it could never have caught the above; the
+  soundness claim was documented but ungated. Iteration counts scale down under
+  `cfg(miri)`, and one lossy-ring liveness assertion is scoped to non-Miri runs
+  where the scheduler makes it meaningful.
 - **`AsyncSubscriber::recv_batch` / `AsyncSubscriberGroup::recv_batch` panicked on
   a zero-length buffer** ("index out of bounds: the len is 0 but the index is 0"),
   and consumed a message it could not store. They now return `0`.
