@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and dead-consumer scenarios, run and asserted rather than described.
 
 ### Removed
+- **Multi-field tuple `Pod` impls.** `(A, B)` through the 12-element tuple used
+  `repr(Rust)` layout, so the compiler could insert padding — `(u8, u64)` carries
+  7 padding bytes. That made `channel::<(u8, u64)>()` undefined behaviour from
+  entirely safe code under `atomic-slots`, using impls the crate itself provided.
+  `()`, `(A,)`, arrays and primitives remain, none of which can carry padding.
+  Replace a multi-field tuple payload with a `#[repr(C)]` struct with explicit
+  padding fields. **Breaking.**
 - **`Publisher::sequence()`** — returned exactly what `published()` returns. Use
   `published()`, whose docs now carry the lag-computation note. **Breaking**;
   this makes the next release semver-major.
@@ -43,6 +50,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Crate packages exclude `docs/`, `verification/`, and `scripts/`.
 
 ### Fixed
+- **Missing read-side `Acquire` fence in the default (volatile) slot read.**
+  `try_read` loaded the payload, then re-checked the stamp with an acquire *load*.
+  An acquire load is a one-way barrier: it stops later accesses from moving
+  earlier, but leaves the hardware free to satisfy the payload read *after* the
+  re-check has validated. On a weakly ordered CPU — aarch64, which this crate
+  supports and benchmarks — a reader could therefore return data from a later
+  overwrite as a valid read. Fixed by placing an `Acquire` fence between the
+  payload read and the re-check, mirroring both the `atomic-slots` path and the
+  `smp_rmb()` in the Linux kernel's `read_seqcount_retry()`. No-op on x86.
 - **Out-of-bounds atomic access in the `atomic-slots` payload copy.** The striped
   copy rounded the payload up to whole `AtomicU64` stripes, so for any `T` whose
   size is not a multiple of 8 — `u8`, `u16`, `u32`, and most structs — the final
@@ -54,12 +70,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in bounds with no change to slot layout and no extra operations in the common
   cases. Found by running Miri against the feature for the first time.
 - **Documented the padding requirement for `atomic-slots`.** A payload with
-  implicit padding — `(u8, u64)` has 7 such bytes, reachable through the crate's
-  own blanket tuple impls — leaves those bytes uninitialized, and reading them as
-  part of an atomic word is undefined regardless of the fix above. `Pod`'s safety
-  contract now states the no-padding requirement explicitly, and the feature's
-  soundness claim is scoped to padding-free payloads. Enforcing this at compile
-  time requires tightening the `Pod` contract and is deferred to a major release.
+  implicit padding leaves those bytes uninitialized, and reading them as part of
+  an atomic word is undefined regardless of the fix above. `Pod`'s safety contract
+  now states the no-padding requirement explicitly. The reachable-from-safe-code
+  case is closed by removing the multi-field tuple impls (see Removed); a
+  hand-written `unsafe impl Pod` for a padded struct remains the implementor's
+  responsibility, which the `miri (atomic-slots)` job is there to catch.
 - **`atomic-slots` is now covered by Miri in CI** (`miri (atomic-slots)` job). The
   existing `miri` job runs the default volatile slots single-threaded with all
   cross-thread tests skipped, so it could never have caught the above; the

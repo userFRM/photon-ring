@@ -14,7 +14,7 @@
 
 Photon Ring is a zero-allocation pub/sub crate for Rust built around pre-allocated ring buffers, per-slot stamp validation, and `T: Pod` payloads. It targets the part of concurrent systems where queueing overhead dominates: market data, telemetry fanout, staged pipelines, and other hot-path broadcast workloads where every subscriber should see every message.
 
-By default, slots use a volatile-based seqlock for maximum performance. With the `atomic-slots` feature, the same stamp protocol operates over `AtomicU64` stripes — **formally sound under the Rust abstract machine** with zero performance regression on x86-64.
+By default, slots use a volatile-based seqlock for maximum performance. With the `atomic-slots` feature, the same stamp protocol operates over `AtomicU64` stripes — **free of data races under the Rust abstract machine** for padding-free payloads, with zero performance regression on x86-64, and verified under Miri in CI.
 
 It is `no_std` compatible with `alloc`, supports named-topic buses and typed buses, and includes a pipeline builder for multi-stage thread topologies on supported desktop/server platforms.
 
@@ -57,7 +57,7 @@ Optional features:
 
 - `derive`: enables `#[derive(photon_ring::DerivePod)]` for user-defined `Pod` types.
 - `hugepages`: enables Linux memory controls such as `mlock`, `prefault`, and NUMA helpers.
-- `atomic-slots`: enables a data-race-free slot implementation that decomposes the payload into `AtomicU64` stripes (stepping down through `AtomicU32`/`U16`/`U8` for a trailing partial stripe) instead of `write_volatile`/`read_volatile`. Zero performance cost on x86-64; ~5-10ns reader overhead on ARM64 due to acquire fence. Eliminates the formal undefined behavior the default path carries under the Rust abstract machine, **for payloads with no padding bytes**. Its multi-threaded tests run under Miri in CI (`miri (atomic-slots)`), so the claim is machine-checked rather than asserted. Padding is the remaining gap: a type such as `(u8, u64)` has 7 uninitialized bytes, and reading those as part of an atomic word is itself undefined. Use `#[repr(C)]` with explicit padding fields (as the examples do) so every byte is initialized.
+- `atomic-slots`: enables a data-race-free slot implementation that decomposes the payload into `AtomicU64` stripes (stepping down through `AtomicU32`/`U16`/`U8` for a trailing partial stripe) instead of `write_volatile`/`read_volatile`. Zero performance cost on x86-64. On ARM64 both paths pay the same reader-side acquire fence, so `atomic-slots` costs nothing extra there either. Eliminates the formal undefined behavior the default path carries under the Rust abstract machine, **for payloads with no padding bytes**. Its multi-threaded tests run under Miri in CI (`miri (atomic-slots)`), so the claim is machine-checked rather than asserted. Padding is the remaining gap: a type such as `(u8, u64)` has 7 uninitialized bytes, and reading those as part of an atomic word is itself undefined. Use `#[repr(C)]` with explicit padding fields (as the examples do) so every byte is initialized.
 
 Rust 1.94+ is supported. For best performance, compile with `-C target-cpu=native` to enable `PREFETCHW` and other CPU-specific optimizations.
 
@@ -106,9 +106,10 @@ Photon Ring moves synchronization into each slot. Every slot carries its own seq
 3. if s1 < expected -> Empty
 4. if s1 > expected -> Lagged
 5. value = read_volatile(slot)    (direct read, T: Pod)
-6. s2 = stamp.load(Acquire)
-7. if s1 == s2 -> return
-8. else -> retry
+6. fence(Acquire)                 (payload read completes before re-check)
+7. s2 = stamp.load(Relaxed)
+8. if s1 == s2 -> return
+9. else -> retry
 ```
 
 ## Why this is fast
@@ -128,7 +129,7 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
 
 ### Against `disruptor-rs`
 
-- **Publish:** 2.8 ns (Intel) / 2.4 ns (M1 Pro), versus 30.6 ns / 15.3 ns for `disruptor-rs`
+- **Publish:** not directly comparable as measured here — photon's publish-only benchmark ran with no consumer attached, while `disruptor-rs` always runs one, so the gap partly measures cache-coherence traffic that photon never paid. Use the `publish, live consumer` benchmarks for a like-for-like figure.
 - **Cross-thread roundtrip:** 95 ns (Intel) / 130 ns (M1 Pro), versus 138 ns / 186 ns for `disruptor-rs`
 
 ### Core operations
@@ -175,10 +176,18 @@ falls behind it observes `Lagged { skipped }` with an exact count, and
 `receive_ratio()` reports what it sampled. Both read the same sequence numbers,
 so an observation can be correlated with the message the risk engine processed.
 
-A consumer that *dies* also releases the ring: its `Subscriber` is dropped as
-the thread unwinds, which removes it from the backpressure set and lets the
-publisher continue. A wedged consumer still applies backpressure — that is the
-guarantee working — but a dead one cannot wedge the publisher forever.
+A consumer that *dies* also releases the ring, **provided its `Subscriber` drops
+with it** — which is automatic when the consumer thread owns the subscriber, as
+the thread unwinds and `Drop` removes it from the backpressure set. A subscriber
+parked in long-lived shared state (an `Arc`'d registry, a supervisor struct)
+outlives its consumer and keeps gating the publisher, so don't do that with a
+tracked subscriber. A merely *wedged* consumer still applies backpressure — that
+is the guarantee working as intended.
+
+The no-loss guarantee is a property of each tracked subscriber's lifetime, not
+of the ring: if the last tracked subscriber goes away while lossy ones remain,
+nothing gates the publisher any more and the bounded ring behaves like a lossy
+one.
 
 Subscribers can also attach to a ring that is already running, so a lossy
 debug tap can be added and removed on a live system without perturbing it.
@@ -275,11 +284,22 @@ Photon Ring offers two slot implementations, selectable at compile time:
 | **Formal status** | Data race under Rust abstract machine (practical UB) | **Formally sound** — no data races |
 | **Miri** | Flags multi-threaded tests | **Passes, enforced in CI** |
 | **x86-64 cost** | Baseline | **Zero** — identical `MOV` instructions |
-| **ARM64 cost** | Baseline | **+5-10 ns** reader (one `DMB ISHLD` fence) |
+| **ARM64 cost** | One `DMB ISHLD` reader fence (both paths) | Same fence — no additional cost |
 | **Precedent** | Same pattern as Linux kernel seqlocks (20+ years) | Per-word atomic decomposition, as in `atomic-memcpy` |
 
 > [!NOTE]
-> The default volatile-based implementation is **correct on all real hardware** (x86, ARM). The "UB" is purely under Rust's abstract machine — no compiler has ever miscompiled this pattern, and the Linux kernel relies on identical semantics. Enable `atomic-slots` if you need formal soundness, Miri compliance, or defense against hypothetical future compiler optimizations.
+> Both implementations place an `Acquire` fence between the payload read and the
+> stamp re-check — the same barrier the Linux kernel's `read_seqcount_retry()`
+> carries as `smp_rmb()`. Without it an acquire *load* is one-way and a weakly
+> ordered CPU may satisfy the payload read after the re-check has validated,
+> which would return data from a later overwrite. It is a no-op on x86, where TSO
+> orders load-load already.
+>
+> With that fence in place, the default volatile implementation produces correct
+> results on real hardware; what remains is that it is a data race under Rust's
+> abstract machine, which Miri reports and no compiler has yet exploited. Enable
+> `atomic-slots` for a build free of that race — machine-checked in CI, and free
+> on x86-64.
 
 > [!TIP]
 > Keep rich domain types at the edges and publish compact `Pod` messages in the middle. Convert enums, `Option`, booleans, and strings into explicit numeric fields or fixed-size buffers before calling `publish`.

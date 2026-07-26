@@ -175,3 +175,35 @@ fn lossy_subscriber_hot_attaches_and_detaches() {
     }
     assert_eq!(critical.total_lagged(), 0);
 }
+
+/// The no-loss guarantee belongs to a tracked subscriber's lifetime, not to the
+/// ring. Once the last tracked subscriber is gone, nothing gates the publisher
+/// and a bounded ring behaves like a lossy one.
+#[test]
+fn losing_the_last_tracked_subscriber_unbounds_the_ring() {
+    let (mut p, s) = channel_bounded::<u64>(8, 0);
+    let mut lossy = s.subscribe_lossy();
+
+    {
+        let _critical = s.subscribe();
+        for i in 0..8u64 {
+            p.try_publish(i).expect("ring has room");
+        }
+        assert!(p.try_publish(99).is_err(), "tracked subscriber gates here");
+    } // dropped
+
+    // With no tracked subscriber left, the publisher runs unbounded.
+    for i in 0..1_000u64 {
+        p.try_publish(i)
+            .expect("nothing gates the publisher any more");
+    }
+    // The lossy subscriber absorbs that as lag, as documented.
+    let mut lagged = false;
+    while let Err(TryRecvError::Lagged { .. }) | Ok(_) = lossy.try_recv() {
+        if lossy.total_lagged() > 0 {
+            lagged = true;
+            break;
+        }
+    }
+    assert!(lagged, "lossy subscriber should observe the lap as lag");
+}

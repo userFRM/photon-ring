@@ -203,7 +203,20 @@ impl<T: Pod> Slot<T> {
             // Formally a data race. T: Pod makes all bit patterns valid; stamp
             // re-check gates usage.
             let value = unsafe { core::ptr::read_volatile((*self.value.get()).as_ptr()) };
-            let s2 = self.stamp.load(Ordering::Acquire);
+
+            // Acquire fence: the payload load above must complete before the
+            // stamp is re-checked below. An acquire *load* would not be enough —
+            // it only stops later accesses from moving earlier, leaving the
+            // hardware free to satisfy the payload read after `s2` has already
+            // validated, which would return data from a subsequent overwrite as
+            // if it were valid. Required on ARM (DMB ISHLD); no-op on x86, where
+            // TSO already orders load-load. This mirrors the `smp_rmb()` the
+            // Linux kernel places in `read_seqcount_retry()`, and the identical
+            // fence in the `atomic-slots` path.
+            fence(Ordering::Acquire);
+
+            // Relaxed is sufficient here because the fence above orders it.
+            let s2 = self.stamp.load(Ordering::Relaxed);
             if s1 == s2 {
                 return Ok(Some(value));
             }
