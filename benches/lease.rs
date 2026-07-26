@@ -30,6 +30,15 @@ macro_rules! bench_pair {
                 black_box(v.0[0]);
             });
         });
+        $c.bench_function(&format!("process      {} ({}B)", $label, n), |b| {
+            let (mut p, s) = photon_ring::channel_bounded::<$t>(1024, 0);
+            let mut sub = s.subscribe();
+            b.iter(|| {
+                p.publish(black_box(unsafe { core::mem::zeroed() }));
+                let v = sub.try_process(|e: &$t| e.0[0]).unwrap();
+                black_box(v);
+            });
+        });
         $c.bench_function(&format!("lease        {} ({}B)", $label, n), |b| {
             let (mut p, s) = photon_ring::channel_bounded::<$t>(1024, 0);
             let mut sub = s.subscribe();

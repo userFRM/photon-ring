@@ -240,6 +240,31 @@ impl<T: Pod> Subscriber<T> {
         Ok(Lease { sub: self, value })
     }
 
+    /// Process the next message in place, without copying it out of the ring.
+    ///
+    /// Prototype: gated (bounded + registered) subscribers only. The slot cannot
+    /// be overwritten while gated, so the seqlock validation a copying read needs
+    /// — acquire fence, second stamp load, compare, torn retry — is unnecessary.
+    /// One Acquire stamp load stays: gating excludes the *overwrite* of this slot
+    /// but not the *initial* write, so the publication edge is still required.
+    #[inline]
+    pub fn try_process<R>(&mut self, f: impl FnOnce(&T) -> R) -> Result<R, TryRecvError> {
+        debug_assert!(self.tracker.is_some() && self.ring.backpressure.is_some());
+        // SAFETY: index in bounds.
+        let slot = unsafe { &*self.slots_ptr.add(self.index.slot(self.cursor)) };
+        // Stamp, not the shared ring cursor: it shares the payload's cache line,
+        // whereas the cursor line is publisher-write-hot.
+        if slot.stamp_load() != self.cursor * 2 + 2 {
+            return Err(TryRecvError::Empty);
+        }
+        // SAFETY: gated, so the publisher cannot rewrite this slot here.
+        let out = f(unsafe { &*slot.value_ptr() });
+        self.cursor += 1;
+        self.total_received += 1;
+        self.update_tracker();
+        Ok(out)
+    }
+
     /// How many messages are available to read (capped at ring capacity).
     #[inline]
     pub fn pending(&self) -> u64 {
