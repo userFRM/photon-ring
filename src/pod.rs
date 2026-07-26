@@ -33,9 +33,9 @@
 ///    fields (`_pad: [u8; 3]`) so the whole value is initialized rather than
 ///    letting the compiler insert implicit padding.
 ///
-/// Note that the blanket tuple impls below can violate requirement 4: `(u8, u64)`
-/// has 7 implicit padding bytes. Prefer a `#[repr(C)]` struct with explicit
-/// padding for multi-field payloads.
+/// This is why multi-field tuples are **not** `Pod`: `(u8, u64)` has
+/// `repr(Rust)` layout with 7 implicit padding bytes. Use a `#[repr(C)]`
+/// struct with explicit padding fields for multi-field payloads.
 ///
 /// # What types are NOT `Pod`?
 ///
@@ -79,7 +79,8 @@
 /// # Pre-implemented types
 ///
 /// `Pod` is implemented for all primitive numeric types, arrays of `Pod`
-/// types, and tuples up to 12 elements of `Pod` types.
+/// types, and the zero- and one-element tuples. Larger tuples are excluded
+/// because their layout may include padding.
 ///
 /// For user-defined structs, use `unsafe impl`:
 /// ```
@@ -116,44 +117,13 @@ unsafe impl Pod for isize {}
 // Arrays of Pod types
 unsafe impl<T: Pod, const N: usize> Pod for [T; N] {}
 
-// Tuples of Pod types (up to 12, matching standard library convention)
+// Tuples of `Pod` types.
+//
+// Only the zero- and one-element tuples are covered. A multi-field tuple has
+// `repr(Rust)` layout, so the compiler may insert padding between fields —
+// `(u8, u64)` carries 7 padding bytes. Padding is uninitialized memory, which
+// violates requirement 4 and is undefined to read as part of an atomic word
+// under the `atomic-slots` feature. Use a `#[repr(C)]` struct with explicit
+// padding fields instead.
 unsafe impl Pod for () {}
 unsafe impl<A: Pod> Pod for (A,) {}
-unsafe impl<A: Pod, B: Pod> Pod for (A, B) {}
-unsafe impl<A: Pod, B: Pod, C: Pod> Pod for (A, B, C) {}
-unsafe impl<A: Pod, B: Pod, C: Pod, D: Pod> Pod for (A, B, C, D) {}
-unsafe impl<A: Pod, B: Pod, C: Pod, D: Pod, E: Pod> Pod for (A, B, C, D, E) {}
-unsafe impl<A: Pod, B: Pod, C: Pod, D: Pod, E: Pod, F: Pod> Pod for (A, B, C, D, E, F) {}
-unsafe impl<A: Pod, B: Pod, C: Pod, D: Pod, E: Pod, F: Pod, G: Pod> Pod for (A, B, C, D, E, F, G) {}
-unsafe impl<A: Pod, B: Pod, C: Pod, D: Pod, E: Pod, F: Pod, G: Pod, H: Pod> Pod
-    for (A, B, C, D, E, F, G, H)
-{
-}
-unsafe impl<A: Pod, B: Pod, C: Pod, D: Pod, E: Pod, F: Pod, G: Pod, H: Pod, I: Pod> Pod
-    for (A, B, C, D, E, F, G, H, I)
-{
-}
-unsafe impl<A: Pod, B: Pod, C: Pod, D: Pod, E: Pod, F: Pod, G: Pod, H: Pod, I: Pod, J: Pod> Pod
-    for (A, B, C, D, E, F, G, H, I, J)
-{
-}
-unsafe impl<A: Pod, B: Pod, C: Pod, D: Pod, E: Pod, F: Pod, G: Pod, H: Pod, I: Pod, J: Pod, K: Pod>
-    Pod for (A, B, C, D, E, F, G, H, I, J, K)
-{
-}
-unsafe impl<
-        A: Pod,
-        B: Pod,
-        C: Pod,
-        D: Pod,
-        E: Pod,
-        F: Pod,
-        G: Pod,
-        H: Pod,
-        I: Pod,
-        J: Pod,
-        K: Pod,
-        L: Pod,
-    > Pod for (A, B, C, D, E, F, G, H, I, J, K, L)
-{
-}

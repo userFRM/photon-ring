@@ -200,6 +200,16 @@ impl<T: Pod> Subscriber<T> {
         }
     }
 
+    /// The sequence number this subscriber will read next.
+    ///
+    /// Sequence numbers are shared across every subscriber on the ring, so two
+    /// consumers can correlate their positions — a lossy telemetry tap and a
+    /// gating risk consumer refer to the same message by the same number.
+    #[inline]
+    pub fn cursor(&self) -> u64 {
+        self.cursor
+    }
+
     /// How many messages are available to read (capped at ring capacity).
     #[inline]
     pub fn pending(&self) -> u64 {
