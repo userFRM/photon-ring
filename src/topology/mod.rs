@@ -66,10 +66,12 @@
 extern crate std;
 
 mod builder;
+mod consumer;
 mod fan_out;
 mod pipeline;
 
 pub use builder::{PipelineBuilder, StageBuilder};
+pub use consumer::{Consumer, DrainPolicy};
 pub use fan_out::FanOutBuilder;
 pub use pipeline::Pipeline;
 
