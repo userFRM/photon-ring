@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`Subscribable::subscribe_lossy()`** — a subscriber that never gates the
+  publisher, even on a bounded channel. Registered subscribers keep their
+  no-loss guarantee while an observer (telemetry, logging, a debug tap) shares
+  the same ring without being able to stall it; when it falls behind it reports
+  `Lagged { skipped }` and `receive_ratio()` shows what it sampled. Both read the
+  same sequence numbers, so observations correlate with the messages a gating
+  consumer processed. Previously every subscriber on a bounded ring applied
+  backpressure, so mixing the two contracts required two rings and a second
+  publish.
+- **`Subscriber::cursor()`** — the sequence number this subscriber will read
+  next, for correlating positions across subscribers on a ring.
+- **`examples/degradation.rs` and `tests/degradation.rs`** — the slow-observer
+  and dead-consumer scenarios, run and asserted rather than described.
+
 ### Removed
 - **`Publisher::sequence()`** — returned exactly what `published()` returns. Use
   `published()`, whose docs now carry the lag-computation note. **Breaking**;

@@ -153,6 +153,39 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
 - **Sustained throughput:** about 300M msg/s on Intel and 88M msg/s on M1 Pro
 - **Payload scaling:** at cache-line-sized payloads the copy is a few percent of latency — cross-core cache-coherence transfer dominates. The copy only becomes co-dominant in the KiB range; see [`docs/payload-scaling.md`](docs/payload-scaling.md)
 
+## Degradation, not deadlock
+
+Backpressure exists so a consumer that must not lose messages can stop the
+publisher. But two things should never stop the world: a consumer that is only
+*observing*, and a consumer that has *died*.
+
+Because each slot carries its own stamp, subscribers need no shared barrier —
+so a single ring can carry **different delivery contracts per consumer**:
+
+```rust
+let (mut pub_, subs) = channel_bounded::<Order>(1024, 0);
+
+let mut risk = subs.subscribe();              // gates the publisher, loses nothing
+let mut telemetry = subs.subscribe_lossy();   // never gates it, drops when behind
+```
+
+`risk` keeps its no-loss guarantee. `telemetry` is invisible to the publisher's
+backpressure scan, so however slow it gets it cannot stall order flow; when it
+falls behind it observes `Lagged { skipped }` with an exact count, and
+`receive_ratio()` reports what it sampled. Both read the same sequence numbers,
+so an observation can be correlated with the message the risk engine processed.
+
+A consumer that *dies* also releases the ring: its `Subscriber` is dropped as
+the thread unwinds, which removes it from the backpressure set and lets the
+publisher continue. A wedged consumer still applies backpressure — that is the
+guarantee working — but a dead one cannot wedge the publisher forever.
+
+Subscribers can also attach to a ring that is already running, so a lossy
+debug tap can be added and removed on a live system without perturbing it.
+
+`cargo run --release --example degradation` demonstrates both scenarios;
+`tests/degradation.rs` asserts them.
+
 ## Comparison
 
 | | Photon Ring | disruptor-rs (v4) | crossbeam-channel | bus |

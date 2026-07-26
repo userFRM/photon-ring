@@ -61,6 +61,51 @@ impl<T: Pod> Subscribable<T> {
         SubscriberGroup(self.subscribe())
     }
 
+    /// Create a subscriber that never gates the publisher.
+    ///
+    /// On a bounded channel, [`subscribe`](Self::subscribe) registers the
+    /// subscriber for backpressure: the publisher refuses to overwrite a slot
+    /// this subscriber has not read yet. A **lossy** subscriber opts out of
+    /// that guarantee. The publisher ignores it entirely, and if it falls
+    /// behind it observes [`TryRecvError::Lagged`](crate::TryRecvError::Lagged)
+    /// with an exact skip count, exactly as on a lossy channel.
+    ///
+    /// This lets a single ring carry consumers with **different delivery
+    /// contracts**: a risk engine that must see every message, and telemetry
+    /// that must never stall the publisher, reading the same sequence numbers.
+    ///
+    /// ```
+    /// use photon_ring::channel_bounded;
+    ///
+    /// let (mut p, s) = channel_bounded::<u64>(4, 0);
+    /// let mut critical = s.subscribe();        // gates the publisher
+    /// let mut telemetry = s.subscribe_lossy(); // never gates it
+    ///
+    /// p.publish(1);
+    /// assert_eq!(critical.try_recv(), Ok(1));
+    /// assert_eq!(telemetry.try_recv(), Ok(1));
+    /// ```
+    ///
+    /// On a lossy channel this is identical to [`subscribe`](Self::subscribe),
+    /// since no subscriber gates the publisher there.
+    pub fn subscribe_lossy(&self) -> Subscriber<T> {
+        let head = self.ring.cursor.0.load(Ordering::Acquire);
+        let start = if head == u64::MAX { 0 } else { head + 1 };
+        let slots_ptr = self.ring.slots_ptr();
+        let idx = self.ring.index;
+        Subscriber {
+            ring: self.ring.clone(),
+            slots_ptr,
+            index: idx,
+            cursor: start,
+            // No tracker: the publisher's slowest-cursor scan never sees this
+            // subscriber, so it can never be blocked by it.
+            tracker: None,
+            total_lagged: 0,
+            total_received: 0,
+        }
+    }
+
     /// Create a subscriber starting from the **oldest available** message
     /// still in the ring (or 0 if nothing published yet).
     pub fn subscribe_from_oldest(&self) -> Subscriber<T> {
