@@ -321,7 +321,7 @@ cargo test
 cargo bench
 cargo bench --bench payload_scaling
 cargo +nightly miri test --test correctness -- --test-threads=1
-RUSTFLAGS="--cfg loom" cargo test --test loom_mpmc --release  # Loom exhaustive MPMC concurrency tests
+RUSTFLAGS="--cfg loom" cargo test --release --test loom_mpmc --test loom_backpressure  # exhaustive interleaving checks
 cargo run --release --example market_data
 cargo run --release --example pipeline
 cargo run --release --example backpressure

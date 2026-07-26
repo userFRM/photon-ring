@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   publish.
 - **`Subscriber::cursor()`** — the sequence number this subscriber will read
   next, for correlating positions across subscribers on a ring.
+- **`tests/loom_backpressure.rs`** — a loom model of the bounded-channel
+  backpressure guarantee, covering the publisher's cached-slowest fast path and
+  a subscriber registering against a live publisher. Run in CI. Reverting the
+  registration fix makes it fail with the offending interleaving, so the model is
+  demonstrably load-bearing rather than decorative.
 - **`examples/degradation.rs` and `tests/degradation.rs`** — the slow-observer
   and dead-consumer scenarios, run and asserted rather than described.
 
