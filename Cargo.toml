@@ -7,14 +7,14 @@ version = "2.5.0"
 edition = "2021"
 rust-version = "1.94"
 description = "Ultra-low-latency SPMC/MPMC pub/sub using stamped ring buffers. Formally sound with atomic-slots feature. no_std compatible."
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 keywords = ["pubsub", "spmc", "lock-free", "no_std", "zero-alloc"]
 categories = ["concurrency", "no-std"]
 readme = "README.md"
 repository = "https://github.com/userFRM/photon-ring"
 homepage = "https://github.com/userFRM/photon-ring"
 documentation = "https://docs.rs/photon-ring"
-exclude = [".github/"]
+exclude = [".github/", ".claude/", "docs/", "verification/", "scripts/"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::group::SubscriberGroup;
 use super::subscriber::Subscriber;
@@ -38,10 +38,7 @@ impl<T: Pod> Subscribable<T> {
         Subscriber {
             ring: self.ring.clone(),
             slots_ptr,
-            capacity: idx.capacity,
-            mask: idx.mask,
-            reciprocal: idx.reciprocal,
-            is_pow2: idx.is_pow2,
+            index: idx,
             cursor: start,
             tracker,
             total_lagged: 0,
@@ -61,23 +58,7 @@ impl<T: Pod> Subscribable<T> {
     /// Panics if `N` is 0.
     pub fn subscribe_group<const N: usize>(&self) -> SubscriberGroup<T, N> {
         assert!(N > 0, "SubscriberGroup requires at least 1 subscriber");
-        let head = self.ring.cursor.0.load(Ordering::Acquire);
-        let start = if head == u64::MAX { 0 } else { head + 1 };
-        let tracker = self.ring.register_tracker(start);
-        let slots_ptr = self.ring.slots_ptr();
-        let idx = self.ring.index;
-        SubscriberGroup {
-            ring: self.ring.clone(),
-            slots_ptr,
-            capacity: idx.capacity,
-            mask: idx.mask,
-            reciprocal: idx.reciprocal,
-            is_pow2: idx.is_pow2,
-            cursor: start,
-            total_lagged: 0,
-            total_received: 0,
-            tracker,
-        }
+        SubscriberGroup(self.subscribe())
     }
 
     /// Create a subscriber starting from the **oldest available** message
@@ -98,10 +79,7 @@ impl<T: Pod> Subscribable<T> {
         Subscriber {
             ring: self.ring.clone(),
             slots_ptr,
-            capacity: idx.capacity,
-            mask: idx.mask,
-            reciprocal: idx.reciprocal,
-            is_pow2: idx.is_pow2,
+            index: idx,
             cursor: start,
             tracker,
             total_lagged: 0,
@@ -138,10 +116,7 @@ impl<T: Pod> Subscribable<T> {
         Subscriber {
             ring: self.ring.clone(),
             slots_ptr,
-            capacity: idx.capacity,
-            mask: idx.mask,
-            reciprocal: idx.reciprocal,
-            is_pow2: idx.is_pow2,
+            index: idx,
             cursor: start,
             tracker,
             total_lagged: 0,

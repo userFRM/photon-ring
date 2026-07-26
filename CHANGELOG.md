@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- **`Publisher::sequence()`** — returned exactly what `published()` returns. Use
+  `published()`, whose docs now carry the lag-computation note. **Breaking**;
+  this makes the next release semver-major.
+
+### Changed
+- **Dual-licensed under `MIT OR Apache-2.0`** (was Apache-2.0 only). `LICENSE-MIT`
+  added; existing Apache-2.0 terms are unchanged and remain available.
+- **`Pipeline::try_join`** now reports failures. Stage panics are captured at the
+  thread boundary, so the old `Err(payload)` arm was unreachable and the method
+  always returned `Ok(())` even when a stage had panicked. It now returns
+  `Err(payload)` where `payload` downcasts to a `Vec<usize>` of panicked stage
+  indices; the original panic payload is not recoverable by design.
+  `Pipeline::join` documented accordingly — it never re-panics.
+- **`SubscriberGroup`** is now a thin wrapper over `Subscriber` (all `N` logical
+  subscribers already shared one cursor). Public methods are unchanged;
+  `recv()` now uses `Subscriber`'s two-phase spin — 64 bare iterations before the
+  power-efficient wait — instead of a single-phase loop.
+- Crate packages exclude `docs/`, `verification/`, and `scripts/`.
+
+### Fixed
+- **`AsyncSubscriber::recv_batch` / `AsyncSubscriberGroup::recv_batch` panicked on
+  a zero-length buffer** ("index out of bounds: the len is 0 but the index is 0"),
+  and consumed a message it could not store. They now return `0`.
+- Documented loom command was missing `RUSTFLAGS="--cfg loom"` and so ran zero
+  tests.
+- Payload-scaling chart and surrounding prose presented a modeled competitor curve
+  as measured data; the chart now plots only measured Photon Ring numbers.
+- Stale docs corrected: the `wait.rs` "UMWAIT not yet implemented" note (it is
+  implemented), `photon-ring-metrics`' "power of two" capacity comment, and the
+  `Pod`/`Message` derive examples missing `#[repr(C)]`.
+
+### Internal
+- Deduplicated the Lemire fastmod slot index into `RingIndex::slot`, the publisher
+  construction and watermark checks, and the pipeline stage-spawn plumbing.
+- Collapsed nine near-identical `Option<T>` arms in the `Message` derive.
+- Publish workflow no longer masks real `cargo publish` failures with `|| true`.
+- Removed an orphaned script, a dead benchmark function, and redundant
+  `unsafe impl Send`s.
+- Benchmarks: `photon: publish only` had no consumer attached while
+  `disruptor: publish only` always runs one, so the two were not comparable.
+  Added `publish, live consumer` variants (lossy and bounded) for a like-for-like
+  measurement and relabeled the original.
+
 ## [2.5.0] - 2026-03-19
 
 ### Added
@@ -27,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (snapshot/delta tracking), `PublisherMetrics`. Framework-agnostic. 7 tests.
 - **Loom MPMC model tests:** Standalone loom model of the MPMC cursor advancement
   protocol. 4 scenarios covering 2-producer basic, contention, consumer reads,
-  and cursor catch-up. Run with `cargo test --test loom_mpmc --release`.
+  and cursor catch-up. Run with `RUSTFLAGS="--cfg loom" cargo test --test loom_mpmc --release`.
 
 ### Changed
 - `RingIndex` struct encapsulates capacity, mask, reciprocal, and is_pow2 flag.
@@ -70,9 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one extra `DMB ISHLD` barrier in the reader path (~5-10ns). Miri-passable.
   `no_std` compatible. 8 new tests covering partial stripes, odd-sized payloads,
   cross-thread stress, MPMC, and bounded backpressure under atomic-slots.
-- **3 research documents** exploring seqlock alternatives via constraint-anchored
-  analysis (prohibition engine + impossibility proofs). All 3 independent agents
-  converged on the same design. See `docs/research-*.md`.
+- **Seqlock alternatives analysis** exploring sound alternatives to the
+  seqlock-stamped slot via constraint-anchored analysis (prohibition +
+  impossibility proofs), which informed the `atomic-slots` design.
 
 ## [2.3.0] - 2026-03-18
 

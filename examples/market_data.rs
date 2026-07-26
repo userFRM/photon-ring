@@ -1,5 +1,10 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Market data fan-out: a single topic bus with one channel per symbol, and
+//! one publisher and one subscriber on each.
+//!
+//! Run with: cargo run --release --example market_data
 
 use photon_ring::Photon;
 use std::thread;

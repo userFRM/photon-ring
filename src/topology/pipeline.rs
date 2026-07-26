@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 extern crate std;
 
@@ -42,42 +42,33 @@ impl Pipeline {
     /// This consumes the pipeline. Call [`shutdown`](Pipeline::shutdown)
     /// first, or the threads may run indefinitely.
     ///
-    /// If any stage panicked, the first panic is resumed after all threads
-    /// have been joined. Use [`try_join`](Pipeline::try_join) to handle
-    /// panics without re-unwinding.
+    /// Stage panics are captured at the thread boundary (a panicking stage
+    /// records its status and exits), so joining never fails. Detect failures
+    /// with [`panicked_stages`](Pipeline::panicked_stages) or
+    /// [`is_healthy`](Pipeline::is_healthy), or use
+    /// [`try_join`](Pipeline::try_join) to get the panicked indices back.
     pub fn join(mut self) {
-        let handles = core::mem::take(&mut self.handles);
-        let mut first_panic = None;
-        for h in handles {
-            if let Err(e) = h.join() {
-                if first_panic.is_none() {
-                    first_panic = Some(e);
-                }
-            }
-        }
-        if let Some(panic) = first_panic {
-            std::panic::resume_unwind(panic);
+        for h in core::mem::take(&mut self.handles) {
+            let _ = h.join();
         }
     }
 
-    /// Wait for all stage threads to finish, returning any panic payload
-    /// instead of re-unwinding.
+    /// Wait for all stage threads to finish, reporting which stages panicked.
     ///
-    /// Returns `Ok(())` if all stages completed cleanly, or
-    /// `Err(payload)` with the first panic payload if any stage panicked.
+    /// Returns `Ok(())` if every stage completed cleanly, or `Err(payload)`
+    /// where `payload` downcasts to a `Vec<usize>` of the panicked stage
+    /// indices (ascending). Because panics are captured at the thread
+    /// boundary, the original panic payload is not recoverable — the indices
+    /// identify which stage closures failed.
     pub fn try_join(mut self) -> Result<(), alloc::boxed::Box<dyn core::any::Any + Send>> {
-        let handles = core::mem::take(&mut self.handles);
-        let mut first_panic = None;
-        for h in handles {
-            if let Err(e) = h.join() {
-                if first_panic.is_none() {
-                    first_panic = Some(e);
-                }
-            }
+        for h in core::mem::take(&mut self.handles) {
+            let _ = h.join();
         }
-        match first_panic {
-            Some(panic) => Err(panic),
-            None => Ok(()),
+        let panicked = self.panicked_stages();
+        if panicked.is_empty() {
+            Ok(())
+        } else {
+            Err(alloc::boxed::Box::new(panicked))
         }
     }
 

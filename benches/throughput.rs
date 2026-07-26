@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
@@ -8,8 +8,14 @@ use std::hint::black_box;
 // Photon benchmarks
 // ---------------------------------------------------------------------------
 
+/// Publish cost with **no consumer attached**.
+///
+/// This measures the raw write path only: the slot line stays Modified in the
+/// publisher's L1 and no coherence traffic occurs. It is NOT comparable to
+/// `disruptor: publish only`, whose builder always runs a live consumer thread.
+/// For that comparison see `publish_live_consumer_*` below.
 fn publish_single(c: &mut Criterion) {
-    c.bench_function("photon: publish only", |b| {
+    c.bench_function("photon: publish only (no consumer)", |b| {
         let (mut p, _s) = photon_ring::channel::<u64>(4096);
         let mut i = 0u64;
         b.iter(|| {
@@ -17,6 +23,58 @@ fn publish_single(c: &mut Criterion) {
             i = i.wrapping_add(1);
         });
     });
+}
+
+/// Publish cost with a live consumer thread spinning on the other side —
+/// the like-for-like counterpart to `disruptor: publish only`, whose builder
+/// always spawns a consumer. The consumer does the same trivial work as the
+/// disruptor event handler (one `Relaxed` store), so both publishers pay for
+/// cache-line invalidation from a concurrent reader.
+///
+/// Two variants, because the delivery guarantees differ:
+/// - **lossy**: the default `channel()` never blocks the publisher; it laps
+///   the ring and overwrites unread slots.
+/// - **bounded**: `channel_bounded()` blocks the publisher when it would lap
+///   the slowest subscriber, matching the disruptor's lossless semantics.
+fn publish_live_consumer(c: &mut Criterion) {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    for (label, bounded) in [
+        ("photon: publish, live consumer (lossy)", false),
+        ("photon: publish, live consumer (bounded)", true),
+    ] {
+        c.bench_function(label, |b| {
+            let (mut p, s) = if bounded {
+                photon_ring::channel_bounded::<u64>(4096, 0)
+            } else {
+                photon_ring::channel::<u64>(4096)
+            };
+            let mut sub = s.subscribe();
+            let sink = Arc::new(AtomicU64::new(0));
+            let sink_r = sink.clone();
+            let done = Arc::new(AtomicBool::new(false));
+            let done_r = done.clone();
+
+            let reader = std::thread::spawn(move || {
+                while !done_r.load(Ordering::Relaxed) {
+                    if let Ok(v) = sub.try_recv() {
+                        sink_r.store(v, Ordering::Relaxed);
+                    }
+                }
+            });
+
+            let mut i = 0u64;
+            b.iter(|| {
+                p.publish(black_box(i));
+                i = i.wrapping_add(1);
+            });
+
+            done.store(true, Ordering::Relaxed);
+            reader.join().expect("consumer thread panicked");
+            black_box(sink.load(Ordering::Relaxed));
+        });
+    }
 }
 
 fn publish_recv_roundtrip(c: &mut Criterion) {
@@ -168,7 +226,11 @@ fn struct_roundtrip(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// Disruptor comparison benchmarks (apple-to-apple single-threaded roundtrip)
+// Disruptor comparison benchmarks.
+//
+// disruptor's `.build()` runs the event handler on its own thread, so the
+// roundtrip below (publish, then spin until the consumer thread processes it)
+// is inherently cross-thread — there is no same-thread mode to compare against.
 // ---------------------------------------------------------------------------
 
 fn disruptor_publish_only(c: &mut Criterion) {
@@ -341,6 +403,7 @@ fn spmc_vs_mpmc(c: &mut Criterion) {
 criterion_group!(
     benches,
     publish_single,
+    publish_live_consumer,
     publish_recv_roundtrip,
     fanout,
     fanout_group,

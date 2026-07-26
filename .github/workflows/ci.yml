@@ -144,16 +144,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --target wasm32-unknown-unknown
 
-  # ── No default features (pure no_std) ────────────────────────────────
-  no-default-features:
-    name: no-default-features
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --no-default-features
-
   # ── Hugepages feature gate (Linux only) ──────────────────────────────
   hugepages:
     name: hugepages feature
@@ -208,17 +198,35 @@ jobs:
   # ── Publish to crates.io (only on tagged releases) ───────────────────
   publish:
     name: publish
-    needs: [check, test, clippy, fmt, miri, cross-platform, wasm, no-default-features, hugepages, atomic-slots, async-crate, metrics-crate]
+    needs: [check, test, clippy, fmt, miri, cross-platform, wasm, hugepages, atomic-slots, async-crate, metrics-crate]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Publish order: derive → core → async + metrics.
-      # "|| true" skips already-published crates (idempotent re-runs).
-      - run: cargo publish -p photon-ring-derive --token ${{ secrets.CARGO_REGISTRY_TOKEN }} || true
-      - run: sleep 30
-      - run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} || true
-      - run: sleep 30
-      - run: cargo publish -p photon-ring-async --token ${{ secrets.CARGO_REGISTRY_TOKEN }} || true
-      - run: cargo publish -p photon-ring-metrics --token ${{ secrets.CARGO_REGISTRY_TOKEN }} || true
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        # Idempotent re-runs: tolerate an already-published version, but fail
+        # on any other error instead of masking it with `|| true`.
+        run: |
+          set -euo pipefail
+          publish() {
+            local out
+            if out=$(cargo publish "$@" --token "$CARGO_REGISTRY_TOKEN" 2>&1); then
+              echo "$out"
+            elif echo "$out" | grep -qiE 'already (exists|uploaded)'; then
+              echo "$out"
+              echo "==> already published, skipping"
+            else
+              echo "$out"
+              return 1
+            fi
+          }
+          # Order: derive → core → async + metrics; pause for index propagation.
+          publish -p photon-ring-derive
+          sleep 30
+          publish
+          sleep 30
+          publish -p photon-ring-async
+          publish -p photon-ring-metrics

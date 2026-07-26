@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::mp_publisher::MpPublisher;
 use super::publisher::Publisher;
@@ -7,6 +7,21 @@ use super::subscribable::Subscribable;
 use crate::pod::Pod;
 use crate::ring::SharedRing;
 use alloc::sync::Arc;
+
+/// Build the single-producer `Publisher` view over a freshly created ring.
+/// Shared by [`channel`] (lossy) and [`channel_bounded`] — they differ only
+/// in how the ring is allocated, not in the publisher wiring.
+fn make_publisher<T: Pod>(ring: &Arc<SharedRing<T>>) -> Publisher<T> {
+    Publisher {
+        has_backpressure: ring.backpressure.is_some(),
+        ring: ring.clone(),
+        slots_ptr: ring.slots_ptr(),
+        index: ring.index,
+        cursor_ptr: ring.cursor_ptr(),
+        seq: 0,
+        cached_slowest: 0,
+    }
+}
 
 /// Create a Photon SPMC channel.
 ///
@@ -23,24 +38,8 @@ use alloc::sync::Arc;
 /// ```
 pub fn channel<T: Pod>(capacity: usize) -> (Publisher<T>, Subscribable<T>) {
     let ring = Arc::new(SharedRing::new(capacity));
-    let slots_ptr = ring.slots_ptr();
-    let idx = ring.index;
-    let cursor_ptr = ring.cursor_ptr();
-    (
-        Publisher {
-            has_backpressure: ring.backpressure.is_some(),
-            ring: ring.clone(),
-            slots_ptr,
-            capacity: idx.capacity,
-            mask: idx.mask,
-            reciprocal: idx.reciprocal,
-            is_pow2: idx.is_pow2,
-            cursor_ptr,
-            seq: 0,
-            cached_slowest: 0,
-        },
-        Subscribable { ring },
-    )
+    let publisher = make_publisher(&ring);
+    (publisher, Subscribable { ring })
 }
 
 /// Create a backpressure-capable SPMC channel.
@@ -83,24 +82,8 @@ pub fn channel_bounded<T: Pod>(
     watermark: usize,
 ) -> (Publisher<T>, Subscribable<T>) {
     let ring = Arc::new(SharedRing::new_bounded(capacity, watermark));
-    let slots_ptr = ring.slots_ptr();
-    let idx = ring.index;
-    let cursor_ptr = ring.cursor_ptr();
-    (
-        Publisher {
-            has_backpressure: ring.backpressure.is_some(),
-            ring: ring.clone(),
-            slots_ptr,
-            capacity: idx.capacity,
-            mask: idx.mask,
-            reciprocal: idx.reciprocal,
-            is_pow2: idx.is_pow2,
-            cursor_ptr,
-            seq: 0,
-            cached_slowest: 0,
-        },
-        Subscribable { ring },
-    )
+    let publisher = make_publisher(&ring);
+    (publisher, Subscribable { ring })
 }
 
 /// Create a Photon MPMC (multi-producer, multi-consumer) channel.
@@ -138,10 +121,7 @@ pub fn channel_mpmc<T: Pod>(capacity: usize) -> (MpPublisher<T>, Subscribable<T>
         MpPublisher {
             ring: ring.clone(),
             slots_ptr,
-            capacity: idx.capacity,
-            mask: idx.mask,
-            reciprocal: idx.reciprocal,
-            is_pow2: idx.is_pow2,
+            index: idx,
             cursor_ptr,
             next_seq_ptr,
         },

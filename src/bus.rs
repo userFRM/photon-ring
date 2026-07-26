@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use alloc::string::String;
 
@@ -51,7 +51,7 @@ impl<T: Pod> Photon<T> {
         entry
             .publisher
             .take()
-            .unwrap_or_else(|| panic!("publisher already taken for topic '{}'", topic))
+            .unwrap_or_else(|| panic!("publisher already taken for topic '{topic}'"))
     }
 
     /// Try to take the publisher for a topic. Returns `None` if the

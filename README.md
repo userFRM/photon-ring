@@ -6,7 +6,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/photon-ring.svg)](https://crates.io/crates/photon-ring)
 [![docs.rs](https://docs.rs/photon-ring/badge.svg)](https://docs.rs/photon-ring)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![no_std](https://img.shields.io/badge/no__std-compatible-brightgreen.svg)](https://docs.rs/photon-ring)
 [![CI](https://github.com/userFRM/photon-ring/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/userFRM/photon-ring/actions/workflows/ci.yml)
 
@@ -151,7 +151,7 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
 ### Throughput
 
 - **Sustained throughput:** about 300M msg/s on Intel and 88M msg/s on M1 Pro
-- **Payload scaling:** Photon Ring outperformed `disruptor-rs` across 8-byte to 4 KiB `Pod` payloads; see [`docs/payload-scaling.md`](docs/payload-scaling.md)
+- **Payload scaling:** at cache-line-sized payloads the copy is a few percent of latency — cross-core cache-coherence transfer dominates. The copy only becomes co-dominant in the KiB range; see [`docs/payload-scaling.md`](docs/payload-scaling.md)
 
 ## Comparison
 
@@ -265,7 +265,7 @@ cargo test
 cargo bench
 cargo bench --bench payload_scaling
 cargo +nightly miri test --test correctness -- --test-threads=1
-cargo test --test loom_mpmc --release  # Loom exhaustive MPMC concurrency tests
+RUSTFLAGS="--cfg loom" cargo test --test loom_mpmc --release  # Loom exhaustive MPMC concurrency tests
 cargo run --release --example market_data
 cargo run --release --example pipeline
 cargo run --release --example backpressure
@@ -273,4 +273,13 @@ cargo run --release --example backpressure
 
 ## License
 
-Licensed under Apache-2.0. See [LICENSE-APACHE](LICENSE-APACHE).
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.

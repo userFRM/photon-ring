@@ -1,12 +1,12 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::channel::{self, Subscribable, Subscriber};
+use crate::channel::{Subscribable, Subscriber};
 use crate::pod::Pod;
 use crate::wait::WaitStrategy;
 
 use super::pipeline::Pipeline;
-use super::{spawn_stage, SharedState};
+use super::SharedState;
 
 /// Builder for a fan-out (diamond) topology with two output branches.
 ///
@@ -29,14 +29,7 @@ impl<A: Pod, B: Pod> FanOutBuilder<A, B> {
     /// Returns a tuple of `(branch_a_subscriber, branch_b_subscriber)` and
     /// the [`Pipeline`] handle.
     pub fn build(self) -> ((Subscriber<A>, Subscriber<B>), Pipeline) {
-        (
-            (self.sub_a, self.sub_b),
-            Pipeline {
-                handles: self.state.handles,
-                shutdown: self.state.shutdown,
-                statuses: self.state.statuses,
-            },
-        )
+        ((self.sub_a, self.sub_b), self.state.into())
     }
 
     /// Add a processing stage after branch A.
@@ -58,19 +51,7 @@ impl<A: Pod, B: Pod> FanOutBuilder<A, B> {
         f: impl Fn(A) -> A2 + Send + 'static,
         strategy: WaitStrategy,
     ) -> FanOutBuilder<A2, B> {
-        let (next_pub, next_subs) = channel::channel::<A2>(self.capacity);
-        let next_sub = next_subs.subscribe();
-
-        let (status, handle) = spawn_stage(
-            self.sub_a,
-            next_pub,
-            self.state.shutdown.clone(),
-            f,
-            strategy,
-        );
-        self.state.handles.push(handle);
-        self.state.statuses.push(status);
-
+        let (next_sub, next_subs) = self.state.add_stage(self.sub_a, self.capacity, f, strategy);
         FanOutBuilder {
             sub_a: next_sub,
             subs_a: next_subs,
@@ -100,19 +81,7 @@ impl<A: Pod, B: Pod> FanOutBuilder<A, B> {
         f: impl Fn(B) -> B2 + Send + 'static,
         strategy: WaitStrategy,
     ) -> FanOutBuilder<A, B2> {
-        let (next_pub, next_subs) = channel::channel::<B2>(self.capacity);
-        let next_sub = next_subs.subscribe();
-
-        let (status, handle) = spawn_stage(
-            self.sub_b,
-            next_pub,
-            self.state.shutdown.clone(),
-            f,
-            strategy,
-        );
-        self.state.handles.push(handle);
-        self.state.statuses.push(status);
-
+        let (next_sub, next_subs) = self.state.add_stage(self.sub_b, self.capacity, f, strategy);
         FanOutBuilder {
             sub_a: self.sub_a,
             subs_a: self.subs_a,

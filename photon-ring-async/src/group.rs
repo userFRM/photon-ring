@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::DEFAULT_SPIN_BUDGET;
 use core::future::Future;
@@ -68,6 +68,12 @@ impl<T: Pod, const N: usize> AsyncSubscriberGroup<T, N> {
     }
 
     fn poll_recv_batch(&mut self, buf: &mut [T], cx: &mut Context<'_>) -> Poll<usize> {
+        // Nothing can be stored in a zero-length buffer, so return before the
+        // spin loop below — it would consume a message and then have nowhere
+        // to put it.
+        if buf.is_empty() {
+            return Poll::Ready(0);
+        }
         let count = self.inner.recv_batch(buf);
         if count > 0 {
             Poll::Ready(count)
@@ -164,7 +170,3 @@ impl<'a, T: Pod, const N: usize> Future for GroupRecvFuture<'a, T, N> {
         self.group.poll_recv(cx)
     }
 }
-
-// SAFETY: AsyncSubscriberGroup<T, N> is Send because SubscriberGroup<T, N>
-// is Send and spin_budget is a plain u32.
-unsafe impl<T: Pod, const N: usize> Send for AsyncSubscriberGroup<T, N> {}

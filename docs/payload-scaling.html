@@ -1,6 +1,6 @@
 <!--
   Copyright 2026 Photon Ring Contributors
-  SPDX-License-Identifier: Apache-2.0
+  SPDX-License-Identifier: MIT OR Apache-2.0
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -8,7 +8,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Payload Scaling &mdash; Photon Ring</title>
-  <meta name="description" content="How Photon Ring latency scales with payload size, from 8 bytes to 4 KiB, compared against disruptor-rs.">
+  <meta name="description" content="How Photon Ring latency scales with payload size, from 8 bytes to 4 KiB.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x2299;</text></svg>">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <style>
@@ -90,14 +90,14 @@
   <div class="container">
     <div class="breadcrumb"><a href="index.html">Photon Ring</a> / Payload Scaling</div>
     <h1>Payload Scaling Analysis</h1>
-    <p>How Photon Ring latency scales with payload size from 8 bytes to 4 KiB, with disruptor-rs comparison.</p>
+    <p>How Photon Ring latency scales with payload size from 8 bytes to 4 KiB.</p>
   </div>
 </div>
 
 <div class="content">
   <div class="container">
 
-    <img class="payload-img" src="images/payload-scaling.png" alt="Payload scaling chart: Photon Ring vs disruptor-rs across 8B-4KiB payloads">
+    <img class="payload-img" src="images/payload-scaling.png" alt="Payload scaling chart: Photon Ring same-thread and cross-thread latency across 8B-4KiB payloads">
 
     <h2>Environment</h2>
     <div class="table-wrapper">
@@ -133,34 +133,33 @@
       </table>
     </div>
 
-    <h2>Cross-Thread Roundtrip vs disruptor-rs</h2>
+    <h2>Cross-Thread Roundtrip</h2>
 
     <div class="callout callout-warn">
       <strong>Methodology note:</strong> The 117 ns at 8B here vs 95 ns in the main benchmarks reflects
-      differences in Criterion warm-up, iterator structure, and type-generic overhead. The disruptor-rs
-      column is modeled (not measured at each payload size) using the baseline 133 ns from the actual
-      <code>disruptor</code> crate benchmark plus estimated per-cache-line transfer costs.
+      differences in Criterion warm-up, iterator structure, and type-generic overhead. Only Photon Ring
+      is measured; blank cells are payload sizes not run on machine A.
     </div>
 
     <div class="table-wrapper">
       <table>
         <thead>
-          <tr><th>Payload</th><th>Photon Ring (A)</th><th>Photon Ring (B)</th><th>Disruptor (modeled, A)</th><th>Advantage (A)</th></tr>
+          <tr><th>Payload</th><th>Photon Ring (A)</th><th>Photon Ring (B)</th></tr>
         </thead>
         <tbody>
-          <tr><td>8 B</td><td class="td-best">117 ns</td><td>156.7 ns</td><td>133 ns</td><td>12% faster</td></tr>
-          <tr><td>64 B</td><td class="td-best">125 ns</td><td>195.8 ns</td><td>145 ns</td><td>14% faster</td></tr>
-          <tr><td>256 B</td><td class="td-best">148 ns</td><td>156.7 ns</td><td>181 ns</td><td>18% faster</td></tr>
-          <tr><td>512 B</td><td class="td-best">163 ns</td><td>167.6 ns</td><td>229 ns</td><td>29% faster</td></tr>
-          <tr><td>1 KB</td><td class="td-best">191 ns</td><td>226.5 ns</td><td>325 ns</td><td>41% faster</td></tr>
-          <tr><td>4 KB</td><td class="td-best">342 ns</td><td>369.7 ns</td><td>901 ns</td><td>62% faster</td></tr>
+          <tr><td>8 B</td><td>117 ns</td><td>156.7 ns</td></tr>
+          <tr><td>64 B</td><td>125 ns</td><td>195.8 ns</td></tr>
+          <tr><td>256 B</td><td>148 ns</td><td>156.7 ns</td></tr>
+          <tr><td>512 B</td><td>163 ns</td><td>167.6 ns</td></tr>
+          <tr><td>1 KB</td><td>191 ns</td><td>226.5 ns</td></tr>
+          <tr><td>4 KB</td><td>342 ns</td><td>369.7 ns</td></tr>
         </tbody>
       </table>
     </div>
 
     <div class="chart-card">
-      <div class="chart-title">Cross-Thread Latency vs Payload Size (Intel i7-10700KF)</div>
-      <div class="chart-sub">Photon Ring vs modeled disruptor-rs baseline. Log x-axis.</div>
+      <div class="chart-title">Latency vs Payload Size (Intel i7-10700KF)</div>
+      <div class="chart-sub">Photon Ring same-thread vs cross-thread. Log x-axis.</div>
       <div class="chart-container">
         <canvas id="payloadChart"></canvas>
       </div>
@@ -174,12 +173,17 @@
       against a ~96 ns cache-coherence transfer. The copy is <strong style="color:var(--text-bright);">roughly 3% of total latency</strong>.
     </p>
 
-    <h3>Photon Ring outperforms at all tested payload sizes</h3>
-    <p>The performance advantage grows with payload size because:</p>
+    <h3>Why copy-based delivery stays competitive at large payloads</h3>
+    <p>
+      A common expectation is that an in-place design (write and read the slot directly, no copy)
+      should beat a copy-on-publish/copy-on-receive approach at large payloads. We have <strong style="color:var(--text-bright);">not</strong>
+      benchmarked a competitor across these sizes, so this is analysis rather than a measured result &mdash;
+      but the copy is not the dominant cost:
+    </p>
     <ol style="margin-left:24px;margin-bottom:16px;">
-      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">The Disruptor pays the same cache coherence cost.</strong> Consumers must still transfer the same cache lines from the publisher, whether they read in-place or copy.</li>
-      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">The Disruptor has higher base overhead.</strong> Sequence barrier load + event handler dispatch + shared cursor contention adds ~37 ns over Photon Ring's stamp-only fast path.</li>
-      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">x86 memcpy is extremely efficient.</strong> <code>rep movsb</code> with ERMS (Enhanced REP MOVSB) achieves near-memory-bandwidth speeds. The 4 KB copy costs ~200 ns, but the Disruptor's multi-line coherence transfer costs more.</li>
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">Cache coherence dominates, and any design pays it.</strong> Consumers must transfer the modified cache lines from the publisher regardless of whether they read in-place or copy out.</li>
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">x86 memcpy is extremely efficient.</strong> <code>rep movsb</code> with ERMS (Enhanced REP MOVSB) reaches near-memory-bandwidth speeds; a 4 KB copy costs on the order of ~200 ns, small next to the multi-line coherence transfer it rides alongside.</li>
+      <li style="margin-bottom:8px;"><strong style="color:var(--text-bright);">The stamp-only fast path has low fixed overhead.</strong> No shared sequence barrier load or handler dispatch on the read side.</li>
     </ol>
 
     <h2>Regenerating</h2>
@@ -206,9 +210,9 @@ python3 scripts/plot_payload_scaling.py</pre>
   Chart.defaults.font.family = "SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace";
   Chart.defaults.font.size = 11;
 
-  const payloads = ['8 B', '64 B', '256 B', '512 B', '1 KB', '4 KB'];
-  const photon   = [117,   125,   148,    163,    191,   342];
-  const disrupt  = [133,   145,   181,    229,    325,   901];
+  const payloads   = ['8 B', '64 B', '256 B', '512 B', '1 KB', '4 KB'];
+  const crossThread = [117,   125,   148,    163,    191,   342];
+  const sameThread  = [2.4,   18.8,  34.4,   55.9,   88.1,  361.6];
 
   new Chart(document.getElementById('payloadChart'), {
     type: 'line',
@@ -216,8 +220,8 @@ python3 scripts/plot_payload_scaling.py</pre>
       labels: payloads,
       datasets: [
         {
-          label: 'Photon Ring (Intel i7-10700KF)',
-          data: photon,
+          label: 'Photon Ring (cross thread, Intel i7-10700KF)',
+          data: crossThread,
           borderColor: 'rgba(88,166,255,0.9)',
           backgroundColor: 'rgba(88,166,255,0.12)',
           fill: true,
@@ -227,8 +231,8 @@ python3 scripts/plot_payload_scaling.py</pre>
           borderWidth: 2,
         },
         {
-          label: 'disruptor-rs (modeled, Intel i7-10700KF)',
-          data: disrupt,
+          label: 'Photon Ring (same thread, Intel i7-10700KF)',
+          data: sameThread,
           borderColor: 'rgba(227,179,65,0.85)',
           backgroundColor: 'rgba(227,179,65,0.08)',
           fill: true,

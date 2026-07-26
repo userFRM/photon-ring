@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Tests that specifically exercise the `atomic-slots` feature — AtomicU64
 //! stripe-based seqlock reads/writes. Covers partial stripes, multi-stripe

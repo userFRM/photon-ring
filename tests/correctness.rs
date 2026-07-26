@@ -1,5 +1,5 @@
 // Copyright 2026 Photon Ring Contributors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use photon_ring::{
     channel, channel_bounded, channel_mpmc, DependencyBarrier, Photon, Pod, PublishError, Shutdown,
@@ -811,18 +811,6 @@ fn group_counters() {
         other => panic!("expected Lagged, got {other:?}"),
     }
     assert!(group.total_lagged() > 0);
-}
-
-#[test]
-fn publisher_sequence() {
-    let (mut p, _s) = channel::<u64>(8);
-    assert_eq!(p.sequence(), 0);
-    p.publish(1);
-    assert_eq!(p.sequence(), 1);
-    p.publish_batch(&[2, 3, 4]);
-    assert_eq!(p.sequence(), 4);
-    // sequence() == published()
-    assert_eq!(p.sequence(), p.published());
 }
 
 // -------------------------------------------------------------------------

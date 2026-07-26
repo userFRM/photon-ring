@@ -1,6 +1,6 @@
 <!--
   Copyright 2026 Photon Ring Contributors
-  SPDX-License-Identifier: Apache-2.0
+  SPDX-License-Identifier: MIT OR Apache-2.0
 -->
 
 # Payload Scaling Analysis
@@ -43,22 +43,21 @@ incur proportionally higher memcpy cost. This page quantifies the tradeoff.
 
 **Note:** This harness uses a different benchmark structure than the main throughput
 suite. The 117 ns at 8B here vs 95 ns in the main benchmarks reflects differences in
-Criterion warm-up, iterator structure, and type-generic overhead. The Disruptor column
-is modeled (not measured at each payload size) using the baseline 133 ns from the
-actual `disruptor` crate benchmark plus estimated per-cache-line transfer costs.
+Criterion warm-up, iterator structure, and type-generic overhead. Only Photon Ring is
+measured here; the `--` cells are payload sizes not run on machine A.
 
-| Payload | Photon Ring A | Photon Ring B | Disruptor (modeled, A) | Photon Ring advantage (A) |
-|---------|---------------|---------------|------------------------|---------------------------|
-| 8 B | 117 ns | 156.7 ns | 133 ns | 12% faster |
-| 16 B | -- | 157.3 ns | -- | -- |
-| 32 B | -- | 157.9 ns | -- | -- |
-| 64 B | 125 ns | 195.8 ns | 145 ns | 14% faster |
-| 128 B | -- | 168.0 ns | -- | -- |
-| 256 B | 148 ns | 156.7 ns | 181 ns | 18% faster |
-| 512 B | 163 ns | 167.6 ns | 229 ns | 29% faster |
-| 1 KB | 191 ns | 226.5 ns | 325 ns | 41% faster |
-| 2 KB | -- | 275.9 ns | -- | -- |
-| 4 KB | 342 ns | 369.7 ns | 901 ns | 62% faster |
+| Payload | Photon Ring A | Photon Ring B |
+|---------|---------------|---------------|
+| 8 B | 117 ns | 156.7 ns |
+| 16 B | -- | 157.3 ns |
+| 32 B | -- | 157.9 ns |
+| 64 B | 125 ns | 195.8 ns |
+| 128 B | -- | 168.0 ns |
+| 256 B | 148 ns | 156.7 ns |
+| 512 B | 163 ns | 167.6 ns |
+| 1 KB | 191 ns | 226.5 ns |
+| 2 KB | -- | 275.9 ns |
+| 4 KB | 342 ns | 369.7 ns |
 
 ## Key Observations
 
@@ -67,23 +66,23 @@ actual `disruptor` crate benchmark plus estimated per-cache-line transfer costs.
 For payloads up to 56 bytes (one cache line with the stamp), the memcpy costs ~2-3 ns
 against a ~96 ns cache coherence transfer. The copy is **3% of the total latency**.
 
-### Photon Ring outperforms at all tested payload sizes
+### Why copy-based delivery stays competitive at large payloads
 
-We initially hypothesized that at large payload sizes, the Disruptor's in-place
-approach would outperform Photon Ring's copy-based approach. The benchmarks show
-this doesn't happen because:
+A common expectation is that at large payloads an in-place design (write and read
+the slot directly, no copy) should beat Photon Ring's copy-on-publish/copy-on-receive
+approach. We have **not** benchmarked a competitor across these payload sizes, so this
+is analysis rather than a measured result — but the copy is not the dominant cost:
 
-1. **The Disruptor pays the same cache coherence cost** — the consumer must
-   still transfer the same cache lines from the publisher's core, whether it
-   reads them in-place or copies them.
+1. **Cache coherence dominates, and any design pays it** — the consumer must
+   transfer the modified cache lines from the publisher's core regardless of
+   whether it reads them in-place or copies them out.
 
-2. **The Disruptor has higher base overhead** — sequence barrier load + event
-   handler dispatch + shared cursor contention adds ~37 ns over Photon Ring's
-   stamp-only fast path.
+2. **x86 memcpy is extremely efficient** — `rep movsb` with ERMS (Enhanced REP
+   MOVSB) reaches near-memory-bandwidth speeds; a 4 KB copy costs on the order of
+   ~200 ns, small next to the multi-line coherence transfer it rides alongside.
 
-3. **x86 memcpy is extremely efficient** — `rep movsb` with ERMS (Enhanced REP
-   MOVSB) achieves near-memory-bandwidth speeds. The 4 KB copy costs ~200 ns,
-   but the Disruptor's multi-line coherence transfer costs more.
+3. **The stamp-only fast path has low fixed overhead** — no shared sequence
+   barrier load or handler dispatch on the read side.
 
 ### When would in-place access theoretically win?
 
