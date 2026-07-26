@@ -196,16 +196,11 @@ impl<T: Pod> Publisher<T> {
         }
     }
 
-    /// Number of messages published so far.
+    /// Number of messages published so far, which is also the next sequence
+    /// number to be written. Useful for computing lag:
+    /// `publisher.published() - subscriber.cursor`.
     #[inline]
     pub fn published(&self) -> u64 {
-        self.seq
-    }
-
-    /// Current sequence number (same as `published()`).
-    /// Useful for computing lag: `publisher.sequence() - subscriber.cursor`.
-    #[inline]
-    pub fn sequence(&self) -> u64 {
         self.seq
     }
 

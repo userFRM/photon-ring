@@ -813,18 +813,6 @@ fn group_counters() {
     assert!(group.total_lagged() > 0);
 }
 
-#[test]
-fn publisher_sequence() {
-    let (mut p, _s) = channel::<u64>(8);
-    assert_eq!(p.sequence(), 0);
-    p.publish(1);
-    assert_eq!(p.sequence(), 1);
-    p.publish_batch(&[2, 3, 4]);
-    assert_eq!(p.sequence(), 4);
-    // sequence() == published()
-    assert_eq!(p.sequence(), p.published());
-}
-
 // -------------------------------------------------------------------------
 // Bug fix: publish() respects backpressure on bounded channels
 // -------------------------------------------------------------------------

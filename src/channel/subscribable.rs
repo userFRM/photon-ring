@@ -58,20 +58,7 @@ impl<T: Pod> Subscribable<T> {
     /// Panics if `N` is 0.
     pub fn subscribe_group<const N: usize>(&self) -> SubscriberGroup<T, N> {
         assert!(N > 0, "SubscriberGroup requires at least 1 subscriber");
-        let head = self.ring.cursor.0.load(Ordering::Acquire);
-        let start = if head == u64::MAX { 0 } else { head + 1 };
-        let tracker = self.ring.register_tracker(start);
-        let slots_ptr = self.ring.slots_ptr();
-        let idx = self.ring.index;
-        SubscriberGroup {
-            ring: self.ring.clone(),
-            slots_ptr,
-            index: idx,
-            cursor: start,
-            total_lagged: 0,
-            total_received: 0,
-            tracker,
-        }
+        SubscriberGroup(self.subscribe())
     }
 
     /// Create a subscriber starting from the **oldest available** message
