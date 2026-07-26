@@ -5,12 +5,86 @@ use crate::pod::Pod;
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{fence, AtomicU64, Ordering};
+#[cfg(feature = "atomic-slots")]
+use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU8};
 
-/// Number of `AtomicU64` stripes needed to hold a value of type `T`.
+/// Copy `size` bytes from the thread-local `src` into the shared slot at `dst`
+/// using atomic stores.
+///
+/// The payload is walked with the largest naturally-aligned atomic that still
+/// fits the remaining bytes: `AtomicU64` for whole 8-byte stripes, then
+/// `AtomicU32`/`AtomicU16`/`AtomicU8` to finish a trailing partial stripe.
+///
+/// The tail is stepped **down** rather than rounded up because `T`'s storage
+/// only carries provenance for `size_of::<T>()` bytes. Covering a trailing
+/// partial stripe with a whole `AtomicU64` reads and writes past the end of
+/// that provenance — real memory (the slot is padded to its 64-byte
+/// alignment), but out of bounds for the pointer, which Miri rejects as
+/// "does not exist in the borrow stack".
+///
+/// The individual stores need not be atomic with respect to one another — the
+/// seqlock stamp is what detects a torn read. They are atomic solely so that a
+/// concurrent reader is not a data race under the Rust memory model.
+///
+/// # Safety
+///
+/// `dst` must be valid for `size` bytes and 8-byte aligned, `src` valid for
+/// reads of `size` bytes, and every access to the `dst` range must go through
+/// these helpers so no mixed atomic/non-atomic access occurs.
 #[cfg(feature = "atomic-slots")]
 #[inline(always)]
-const fn stripe_count<T>() -> usize {
-    core::mem::size_of::<T>().div_ceil(8)
+unsafe fn store_payload(dst: *mut u8, src: *const u8, size: usize) {
+    let mut off = 0usize;
+    while size - off >= 8 {
+        let v = (src.add(off) as *const u64).read_unaligned();
+        AtomicU64::from_ptr(dst.add(off) as *mut u64).store(v, Ordering::Relaxed);
+        off += 8;
+    }
+    if size - off >= 4 {
+        let v = (src.add(off) as *const u32).read_unaligned();
+        AtomicU32::from_ptr(dst.add(off) as *mut u32).store(v, Ordering::Relaxed);
+        off += 4;
+    }
+    if size - off >= 2 {
+        let v = (src.add(off) as *const u16).read_unaligned();
+        AtomicU16::from_ptr(dst.add(off) as *mut u16).store(v, Ordering::Relaxed);
+        off += 2;
+    }
+    if size - off >= 1 {
+        AtomicU8::from_ptr(dst.add(off)).store(*src.add(off), Ordering::Relaxed);
+    }
+}
+
+/// Load `size` bytes from the shared slot at `src` into the thread-local `dst`
+/// using atomic loads. Mirrors [`store_payload`]; see its documentation for
+/// why the trailing partial stripe steps down through smaller atomics.
+///
+/// # Safety
+///
+/// Same contract as [`store_payload`], with the roles of `src` and `dst`
+/// exchanged: `src` must be 8-byte aligned and valid for `size` bytes.
+#[cfg(feature = "atomic-slots")]
+#[inline(always)]
+unsafe fn load_payload(dst: *mut u8, src: *mut u8, size: usize) {
+    let mut off = 0usize;
+    while size - off >= 8 {
+        let v = AtomicU64::from_ptr(src.add(off) as *mut u64).load(Ordering::Relaxed);
+        (dst.add(off) as *mut u64).write_unaligned(v);
+        off += 8;
+    }
+    if size - off >= 4 {
+        let v = AtomicU32::from_ptr(src.add(off) as *mut u32).load(Ordering::Relaxed);
+        (dst.add(off) as *mut u32).write_unaligned(v);
+        off += 4;
+    }
+    if size - off >= 2 {
+        let v = AtomicU16::from_ptr(src.add(off) as *mut u16).load(Ordering::Relaxed);
+        (dst.add(off) as *mut u16).write_unaligned(v);
+        off += 2;
+    }
+    if size - off >= 1 {
+        *dst.add(off) = AtomicU8::from_ptr(src.add(off)).load(Ordering::Relaxed);
+    }
 }
 
 /// A cache-line-aligned slot holding a seqlock stamp and a payload.
@@ -174,19 +248,17 @@ impl<T: Pod> Slot<T> {
         self.stamp.store(writing, Ordering::Relaxed);
         fence(Ordering::Release);
 
-        let n = stripe_count::<T>();
-        let src = &value as *const T as *const u8;
-        let dst = self.value.get() as *mut u64;
-
-        for i in 0..n {
-            let chunk = unsafe { read_stripe(src, i, core::mem::size_of::<T>()) };
-            // SAFETY: dst is within the Slot's UnsafeCell, properly aligned
-            // (Slot is align(64)). AtomicU64::from_ptr requires *mut u64
-            // with proper alignment and no mixed atomic/non-atomic access.
-            // Under atomic-slots, all accesses to this memory go through
-            // AtomicU64, satisfying the no-mixing requirement.
-            unsafe { AtomicU64::from_ptr(dst.add(i)) }.store(chunk, Ordering::Relaxed);
-        }
+        // SAFETY: the value field is valid for size_of::<T>() bytes and sits at
+        // offset 8 of a 64-byte-aligned Slot, so it is 8-byte aligned. Under
+        // atomic-slots every access to this range goes through store_payload /
+        // load_payload, so there is no mixed atomic/non-atomic access.
+        unsafe {
+            store_payload(
+                self.value.get() as *mut u8,
+                &value as *const T as *const u8,
+                core::mem::size_of::<T>(),
+            )
+        };
 
         self.stamp.store(done, Ordering::Release);
     }
@@ -218,19 +290,20 @@ impl<T: Pod> Slot<T> {
         let s1 = self.stamp.load(Ordering::Acquire);
 
         if s1 == expected {
-            let n = stripe_count::<T>();
-            let src = self.value.get() as *mut u64;
             let mut buf = MaybeUninit::<T>::uninit();
-            let dst = buf.as_mut_ptr() as *mut u8;
 
-            for i in 0..n {
-                // SAFETY: src is within the Slot's UnsafeCell, properly aligned.
-                // Under atomic-slots, all accesses go through AtomicU64.
-                let chunk = unsafe { AtomicU64::from_ptr(src.add(i)) }.load(Ordering::Relaxed);
-                unsafe { write_stripe(dst, i, chunk, core::mem::size_of::<T>()) };
-            }
+            // SAFETY: see the corresponding note in write() — the value field is
+            // valid for size_of::<T>() bytes, 8-byte aligned, and only ever
+            // accessed through these helpers under atomic-slots.
+            unsafe {
+                load_payload(
+                    buf.as_mut_ptr() as *mut u8,
+                    self.value.get() as *mut u8,
+                    core::mem::size_of::<T>(),
+                )
+            };
 
-            // Acquire fence: ensures all stripe loads above complete before
+            // Acquire fence: ensures all payload loads above complete before
             // the second stamp load below. Required on ARM (DMB ISHLD);
             // no-op on x86 (TSO provides load-load ordering).
             fence(Ordering::Acquire);
@@ -250,47 +323,5 @@ impl<T: Pod> Slot<T> {
         }
 
         Err(s1)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Stripe read/write helpers (used by atomic-slots)
-// ---------------------------------------------------------------------------
-
-/// Read 8 bytes from `src` at stripe offset `i`, handling the last partial
-/// stripe by reading only the remaining bytes and zero-padding.
-#[cfg(feature = "atomic-slots")]
-#[inline(always)]
-unsafe fn read_stripe(src: *const u8, i: usize, size: usize) -> u64 {
-    let offset = i * 8;
-    if offset + 8 <= size {
-        // Full 8-byte stripe — read directly.
-        (src.add(offset) as *const u64).read_unaligned()
-    } else {
-        // Partial last stripe — zero-pad.
-        let remaining = size - offset;
-        let mut buf = 0u64;
-        core::ptr::copy_nonoverlapping(src.add(offset), &mut buf as *mut u64 as *mut u8, remaining);
-        buf
-    }
-}
-
-/// Write 8 bytes of a stripe to `dst` at stripe offset `i`, handling the
-/// last partial stripe by writing only the remaining bytes.
-#[cfg(feature = "atomic-slots")]
-#[inline(always)]
-unsafe fn write_stripe(dst: *mut u8, i: usize, chunk: u64, size: usize) {
-    let offset = i * 8;
-    if offset + 8 <= size {
-        // Full 8-byte stripe — write directly.
-        (dst.add(offset) as *mut u64).write_unaligned(chunk);
-    } else {
-        // Partial last stripe — write only remaining bytes.
-        let remaining = size - offset;
-        core::ptr::copy_nonoverlapping(
-            &chunk as *const u64 as *const u8,
-            dst.add(offset),
-            remaining,
-        );
     }
 }

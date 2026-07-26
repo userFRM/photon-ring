@@ -26,7 +26,16 @@
 /// 1. `T` is `Copy` (no destructor, no move semantics).
 /// 2. `T` is `Send` (safe to transfer across threads).
 /// 3. Every possible bit pattern of `size_of::<T>()` bytes is a valid `T`.
-/// 4. `T` has no padding bytes that carry validity constraints.
+/// 4. `T` has **no padding bytes**. Padding is uninitialized memory, and the
+///    `atomic-slots` feature reads the payload as atomic words — reading an
+///    uninitialized byte as part of an integer is undefined behaviour even
+///    though every *initialized* bit pattern is valid. Add explicit padding
+///    fields (`_pad: [u8; 3]`) so the whole value is initialized rather than
+///    letting the compiler insert implicit padding.
+///
+/// Note that the blanket tuple impls below can violate requirement 4: `(u8, u64)`
+/// has 7 implicit padding bytes. Prefer a `#[repr(C)]` struct with explicit
+/// padding for multi-field payloads.
 ///
 /// # What types are NOT `Pod`?
 ///
