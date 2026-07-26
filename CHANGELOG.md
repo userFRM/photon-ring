@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`topology::Consumer`** — a managed terminal consumer. Spawns a thread that
+  runs a handler over every message with `(message, sequence, end_of_batch)`,
+  handling shutdown, batch signalling and panic capture. `Pipeline` covers stages
+  that transform and publish onward; this covers the end of the line, which
+  previously meant hand-rolling a thread and a receive loop. `DrainPolicy::Drain`
+  processes messages still buffered at shutdown so a clean stop loses nothing.
 - **`Subscribable::subscribe_lossy()`** — a subscriber that never gates the
   publisher, even on a bounded channel. Registered subscribers keep their
   no-loss guarantee while an observer (telemetry, logging, a debug tap) shares
