@@ -58,6 +58,7 @@ pub mod affinity;
 pub mod barrier;
 mod bus;
 pub mod channel;
+pub mod event;
 #[cfg(all(target_os = "linux", feature = "hugepages"))]
 pub mod mem;
 mod pod;
@@ -82,6 +83,7 @@ pub use channel::{
     channel, channel_bounded, channel_mpmc, Drain, MpPublisher, PublishError, Publisher,
     Subscribable, Subscriber, SubscriberGroup, TryRecvError,
 };
+pub use event::{event_channel, EventPublisher, EventSubscribable, EventSubscriber};
 pub use pod::Pod;
 pub use ring::Padded;
 

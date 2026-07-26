@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`event_channel` — a ring for payloads that are not `Pod`.** `String`, `Vec`,
+  enums, `Option` and `bool` are ordinary payloads here. Slots own their values,
+  built once by a factory and mutated in place rather than overwritten, so
+  nothing is copied into or out of the ring and steady-state publishing of
+  heap-owning payloads allocates nothing — a `String` field reuses the capacity
+  it had the previous time round the ring.
+
+  The `Pod` bound exists so that a reader racing a writer sees a harmless torn
+  value instead of undefined behaviour. That race is only possible when the
+  publisher may overwrite a slot a subscriber has not read, which cannot happen
+  on a bounded ring where every subscriber is registered for backpressure. With
+  that established, the ring needs no seqlock either: the cursor's
+  `Release`/`Acquire` pair is the whole publication edge, so there are no stamps,
+  no torn-read retry and no fence on this path.
+
+  The trade is that every subscriber gates the publisher — there are no lossy
+  observers on an event ring, because a reader that can be lapped is exactly the
+  reader this design excludes. `channel()` remains for broadcast with lossy taps.
 - **`topology::Consumer`** — a managed terminal consumer. Spawns a thread that
   runs a handler over every message with `(message, sequence, end_of_batch)`,
   handling shutdown, batch signalling and panic capture. `Pipeline` covers stages

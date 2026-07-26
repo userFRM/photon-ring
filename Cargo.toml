@@ -56,6 +56,10 @@ name = "pipeline"
 name = "diamond"
 
 [[bench]]
+name = "event"
+harness = false
+
+[[bench]]
 name = "throughput"
 harness = false
 
