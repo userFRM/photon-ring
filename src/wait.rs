@@ -27,7 +27,7 @@
 //! standard spin-wait hint (~140 cycles on Skylake+).
 //!
 //! On recent Intel (Alder Lake+), the `MonitorWaitFallback`
-//! strategies use `UMONITOR`/`UMWAIT`/`TPAUSE` for near-zero-power wakeup,
+//! strategy uses `TPAUSE` for near-zero-power wakeup,
 //! gated at runtime on the `WAITPKG` CPUID feature.
 
 /// Strategy for blocking `recv()`.
@@ -66,13 +66,13 @@ pub enum WaitStrategy {
         yield_iters: u32,
     },
 
-    /// UMONITOR/UMWAIT on Intel (Tremont+, Alder Lake+) or WFE on ARM.
+    /// TPAUSE on Intel (Tremont+, Alder Lake+) or WFE on ARM.
     ///
-    /// On x86_64 with WAITPKG support: `UMONITOR` sets up a monitored
-    /// address range, `UMWAIT` puts the core into an optimized C0.1/C0.2
-    /// state until a write to the monitored cache line wakes it. Near-zero
-    /// power consumption with ~30 ns wakeup latency, without needing an
-    /// address to monitor.
+    /// On x86_64 with WAITPKG support: `TPAUSE` puts the core into an
+    /// optimized C0.1 state for a bounded interval, giving near-zero power
+    /// consumption with ~30 ns wakeup latency. It monitors no address, which
+    /// is what makes it safe to offer — a variant taking an address to watch
+    /// cannot be constructed safely.
     ///
     /// Falls back to `YieldSpin` on x86 CPUs without WAITPKG support.
     /// On aarch64: uses SEVL+WFE (identical to `YieldSpin`).
@@ -92,7 +92,7 @@ impl Default for WaitStrategy {
     }
 }
 
-/// Check at runtime whether the CPU supports WAITPKG (UMONITOR/UMWAIT/TPAUSE).
+/// Check at runtime whether the CPU supports WAITPKG (TPAUSE).
 ///
 /// CPUID leaf 7, sub-leaf 0, ECX bit 5.
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
@@ -131,23 +131,20 @@ fn waitpkg_supported() -> bool {
     supported
 }
 
-// SAFETY wrappers for UMONITOR/UMWAIT/TPAUSE instructions.
+// SAFETY wrapper for the TPAUSE instruction.
 // These are encoded via raw bytes because stable Rust doesn't expose them
 // as intrinsics yet.
 //
-// UMONITOR: sets up address monitoring (F3 0F AE /6)
-// UMWAIT:   wait until store to monitored line or timeout (F2 0F AE /6)
 // TPAUSE:   timed pause without address monitoring (66 0F AE /6)
 //
 // EDX:EAX = absolute TSC deadline. The instruction exits when either:
-//   (a) a store hits the monitored cache line (UMWAIT only), or
 //   (b) TSC >= deadline, or
-//   (c) an OS-configured timeout (IA32_UMWAIT_CONTROL MSR) fires.
+//   (b) an OS-configured timeout (IA32_UMWAIT_CONTROL MSR) fires.
 //
 // We set the deadline ~100µs in the future — long enough to actually
 // enter a low-power state, short enough to bound worst-case latency
 // if the wakeup event is missed (e.g., the store happened between
-// UMONITOR and UMWAIT).
+// TPAUSE).
 #[cfg(target_arch = "x86_64")]
 mod umwait {
     /// Read the TSC and return a deadline ~100µs in the future.

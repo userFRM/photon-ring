@@ -999,6 +999,10 @@ fn mpmc_two_publishers_one_subscriber() {
         );
     }
 
+    // Not asserted under Miri: its scheduler is deterministic and the ring is
+    // lossy, so a consumer can legitimately observe nothing. The per-producer
+    // ordering invariants above are the actual property under test.
+    #[cfg(not(miri))]
     assert!(!received.is_empty(), "should have received some messages");
 }
 

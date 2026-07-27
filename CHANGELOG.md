@@ -79,6 +79,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `N`. **Breaking.**
 
 ### Changed
+- **The data-race-free slot implementation is now the default.** `atomic-slots`
+  was opt-in, so a plain `channel::<u64>()` reached a backend that races on the
+  payload — correct on real hardware, but a data race under the Rust memory
+  model, reachable from entirely safe code. Measured back to back on x86-64 the
+  two are indistinguishable (publish 3.39 ns volatile against 3.36 ns atomic;
+  publish-and-receive 4.20 against 4.27), and since the reader-side fence landed
+  both pay the same barrier on ARM, so there was no performance argument for
+  shipping the racy one by default. `default-features = false` still selects it.
+
+  With the default sound, Miri now runs the multi-threaded correctness tests in
+  CI instead of skipping fourteen of them, and a new job keeps the volatile path
+  building and tested. **Breaking** for anyone relying on `atomic-slots` being
+  absent.
 - **Dual-licensed under `MIT OR Apache-2.0`** (was Apache-2.0 only). `LICENSE-MIT`
   added; existing Apache-2.0 terms are unchanged and remain available.
 - **`Pipeline::try_join`** now reports failures. Stage panics are captured at the

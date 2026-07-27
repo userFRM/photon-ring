@@ -20,6 +20,11 @@ exclude = [".github/", ".claude/", "docs/", "verification/", "scripts/"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [features]
+# The data-race-free slot implementation is the default. It measures the same as
+# the volatile one on x86-64, and both pay the same reader-side fence on ARM, so
+# there is no performance reason to ship the formally racy path by default.
+# `default-features = false` selects it for anyone who wants it anyway.
+default = ["atomic-slots"]
 hugepages = ["dep:libc"]
 derive = ["dep:photon-ring-derive"]
 atomic-slots = []

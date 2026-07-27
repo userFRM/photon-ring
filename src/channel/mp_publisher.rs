@@ -99,7 +99,6 @@ impl<T: Pod> MpPublisher<T> {
     /// # Example
     ///
     /// ```
-    /// use std::mem::MaybeUninit;
     /// let (p, subs) = photon_ring::channel_mpmc::<u64>(64);
     /// let mut sub = subs.subscribe();
     /// p.publish_with(|| 42u64);

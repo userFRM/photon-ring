@@ -103,7 +103,6 @@ impl<T: Pod> Publisher<T> {
     /// # Example
     ///
     /// ```
-    /// use std::mem::MaybeUninit;
     /// let (mut p, s) = photon_ring::channel::<u64>(64);
     /// let mut sub = s.subscribe();
     /// p.publish_with(|| 42u64);

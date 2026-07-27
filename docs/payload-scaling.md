@@ -91,8 +91,8 @@ An in-place approach would outperform only if:
 - Payloads exceeded L2 cache (256 KB+), where memcpy bandwidth drops
 - The consumer only reads a small subset of a large payload (avoiding full memcpy)
 
-For the latter case, Photon Ring's `publish_with` closure API provides a partial
-solution on the write side.
+For the latter case, an event ring avoids the copy on both sides: slots own
+their values and are mutated in place.
 
 ## Regenerating
 

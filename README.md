@@ -101,7 +101,7 @@ Every ring broadcasts: each subscriber sees each message, with a private cursor 
 | `channel` | `T: Pod` | Lossy. The publisher never blocks; a subscriber that falls behind observes `Lagged { skipped }`. The fastest path. |
 | `channel_bounded` | `T: Pod` | Per consumer. `subscribe()` gates the publisher and loses nothing; `subscribe_lossy()` taps the same ring and can never stall it. |
 | `channel_mpmc` | `T: Pod` | Lossy, many producing threads. There is no bounded MPMC ring — see design constraints. |
-| `event_channel` | Any `T: Send` (`String`, `Vec`, enums) | Every subscriber gates the publisher. Slots are factory-built once and mutated in place; steady state copies and allocates nothing. |
+| `event_channel` | Any `T: Send + Sync` (`String`, `Vec`, enums) | Every subscriber gates the publisher. Slots are factory-built once and mutated in place; steady state copies and allocates nothing. |
 | `Photon<T>` / `TypedBus` | `T: Pod` | String-keyed topics, each an independent lossy ring. `Photon` fixes one payload type for the whole bus; `TypedBus` allows one per topic. |
 | `topology::Pipeline` / `topology::Consumer` | `T: Pod` | Dedicated OS threads wired with lossy rings between stages; shutdown, drain, and panic capture handled. |
 
@@ -118,7 +118,7 @@ Optional features:
 
 - `derive`: enables `#[derive(photon_ring::DerivePod)]` for user-defined `Pod` types.
 - `hugepages`: enables Linux memory controls such as `mlock`, `prefault`, and NUMA helpers.
-- `atomic-slots`: enables a data-race-free slot implementation that decomposes the payload into `AtomicU64` stripes (stepping down through `AtomicU32`/`U16`/`U8` for a trailing partial stripe) instead of `write_volatile`/`read_volatile`. Zero performance cost on x86-64. On ARM64 both paths pay the same reader-side acquire fence, so `atomic-slots` costs nothing extra there either. Eliminates the formal undefined behavior the default path carries under the Rust abstract machine, **for payloads with no padding bytes**. Its multi-threaded tests run under Miri in CI (`miri (atomic-slots)`), so the claim is machine-checked rather than asserted. Padding is the remaining gap: a type such as `(u8, u64)` has 7 uninitialized bytes, and reading those as part of an atomic word is itself undefined. Use `#[repr(C)]` with explicit padding fields (as the examples do) so every byte is initialized.
+- `atomic-slots` **(default)**: the data-race-free slot implementation, which decomposes the payload into `AtomicU64` stripes (stepping down through `AtomicU32`/`U16`/`U8` for a trailing partial stripe) instead of `write_volatile`/`read_volatile`. Zero performance cost on x86-64. On ARM64 both paths pay the same reader-side acquire fence, so `atomic-slots` costs nothing extra there either. Eliminates the formal undefined behavior the default path carries under the Rust abstract machine, **for payloads with no padding bytes**. Its multi-threaded tests run under Miri in CI, so the claim is machine-checked rather than asserted. `default-features = false` selects the older volatile implementation instead, which is a formal data race under the Rust memory model and is only worth taking if you have measured a difference on your hardware. Padding is the remaining gap: a type such as `(u8, u64)` has 7 uninitialized bytes, and reading those as part of an atomic word is itself undefined. Use `#[repr(C)]` with explicit padding fields (as the examples do) so every byte is initialized.
 
 Rust 1.94+ is supported. For best performance, compile with `-C target-cpu=native` to enable `PREFETCHW` and other CPU-specific optimizations.
 
@@ -359,7 +359,9 @@ Wait behavior is explicit. `recv_with` accepts `WaitStrategy::BusySpin`, `YieldS
 
 The `Pod` trait means more than `Copy`: every possible bit pattern of the payload must be valid. This is required because the stamp-based read protocol may speculatively read bytes from a slot while a writer is updating it. If a torn bit pattern could be invalid for `T`, the read would be undefined behavior before the stamp check could discard it.
 
-Primitive numerics, arrays of `Pod`, and tuples of `Pod` are already supported. For your own structs, use `#[repr(C)]`, stick to `Pod` fields, and implement `Pod` manually or via the `derive` feature when appropriate.
+Primitive numerics, arrays of `Pod`, and the zero- and one-element tuples are
+already supported. Larger tuples are not: `repr(Rust)` may pad them, and `Pod`
+forbids padding. For your own structs, use `#[repr(C)]`, stick to `Pod` fields, and implement `Pod` manually or via the `derive` feature when appropriate.
 
 | Type | Why it is not `Pod` | Use instead |
 |---|---|---|

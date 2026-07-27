@@ -89,27 +89,15 @@ jobs:
         with:
           components: miri
       - uses: Swatinem/rust-cache@v2
-      # Run single-threaded correctness tests under Miri.
-      # Multi-threaded tests are excluded because the seqlock protocol
-      # involves deliberate optimistic data races that Miri flags as UB
-      # (see README "Seqlock Memory Model Question").
+      # The default build is data-race-free, so the multi-threaded tests that
+      # previously had to be skipped now run. Only the long stress tests are
+      # excluded, because Miri interprets rather than executes.
       - run: >
-          cargo +nightly miri test --test correctness -- --test-threads=1
-          --skip cross_thread
-          --skip blocking_recv
+          cargo +nightly miri test --test correctness --
           --skip stress_1m
-          --skip bounded_publish_blocks
-          --skip bounded_publish_batch_blocks
-          --skip subscriber_drop_unblocks
-          --skip subscriber_group_bounded_cross
-          --skip bounded_cross_thread
-          --skip mpmc_two_publishers
           --skip mpmc_stress
-          --skip mpmc_blocking_recv
-          --skip mpmc_clone
           --skip arbitrary_capacity_stress
-          --skip arbitrary_capacity_bounded_cross
-          --skip arbitrary_capacity_mpmc
+        timeout-minutes: 30
 
   # ── Miri on atomic-slots (the formally sound slot implementation) ────
   #
@@ -208,25 +196,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --features hugepages
 
-  # ── atomic-slots feature gate (formally sound slot implementation) ──
-  atomic-slots:
-    name: atomic-slots feature
+  # ── Volatile slots (opt-out of the default, still supported) ─────────
+  #
+  # `default-features = false` selects the older volatile implementation. It is
+  # a formal data race under the Rust memory model, so Miri is not run against
+  # it, but it must keep building and passing its tests.
+  volatile-slots:
+    name: volatile slots (no default features)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --features atomic-slots
-      - run: cargo test --features atomic-slots --test atomic_slots --test atomic_slots_payload_sizes
-        timeout-minutes: 5
-      # Run correctness tests with atomic-slots, skipping heavy stress tests
-      # that exceed CI runner capacity in debug mode.
+      - run: cargo check --no-default-features
       - run: >
-          cargo test --features atomic-slots --test correctness --
+          cargo test --no-default-features --lib --tests --
           --skip mpmc_stress
           --skip stress_1m
-          --skip bounded_cross_thread
-          --skip mpmc_two_publishers
+          --skip arbitrary_capacity_mpmc_stress
+          --skip arbitrary_capacity_stress
         timeout-minutes: 5
 
   # ── photon-ring-async tests ────────────────────────────────────────
@@ -252,7 +240,7 @@ jobs:
   # ── Publish to crates.io (only on tagged releases) ───────────────────
   publish:
     name: publish
-    needs: [check, test, clippy, fmt, docs, miri, miri-atomic-slots, loom, cross-platform, wasm, hugepages, atomic-slots, async-crate, metrics-crate]
+    needs: [check, test, clippy, fmt, docs, miri, miri-atomic-slots, loom, cross-platform, wasm, hugepages, volatile-slots, async-crate, metrics-crate]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
