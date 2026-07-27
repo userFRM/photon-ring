@@ -92,8 +92,8 @@
       that plagues traditional sequence-barrier designs. We describe the stamp-in-slot protocol, its safety
       properties under the Rust memory model, and show that per-slot seqlocks combined with per-consumer
       cursors yield constant-time, zero-allocation publish and receive operations. Benchmarks on an Intel
-      i7-10700KF demonstrate 48&nbsp;ns p50 one-way latency and 0.2&nbsp;ns per-subscriber fanout cost with
-      batched subscriber groups &mdash; a 5.5x improvement over independent consumers.
+      i7-10700KF demonstrate 48&nbsp;ns p50 one-way latency and a marginal fanout cost of approximately
+      1.1&nbsp;ns per additional same-thread subscriber.
     </div>
   </div>
 </div>

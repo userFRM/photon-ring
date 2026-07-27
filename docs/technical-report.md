@@ -16,8 +16,8 @@ describe the stamp-in-slot protocol, its safety properties under the Rust
 memory model, and show that per-slot seqlocks combined with per-consumer
 cursors yield constant-time, zero-allocation publish and receive
 operations. Benchmarks on an Intel i7-10700KF demonstrate 48 ns p50
-one-way latency and 0.2 ns per-subscriber fanout cost with batched
-subscriber groups -- a 5.5x improvement over independent consumers.
+one-way latency and a marginal fanout cost of approximately 1.1 ns per
+additional same-thread subscriber.
 
 ## 1. Introduction
 
@@ -789,11 +789,11 @@ We benchmarked Photon Ring v0.8.0 against `disruptor` v4.0.0 on the same hardwar
 
 ### 6.5 bus (Rust)
 
-The `bus` crate [Gjengset, 2016] is a lock-free single-producer multi-consumer broadcast channel. It uses epoch-based synchronization to coordinate readers and writers, providing a simple `broadcast`/`recv` API without topic routing or subscriber grouping. The implementation is notable for its minimalism: zero dependencies, a single source file, and a straightforward epoch-flip protocol.
+The `bus` crate [Gjengset, 2016] is a lock-free single-producer multi-consumer broadcast channel. It uses epoch-based synchronization to coordinate readers and writers, providing a simple `broadcast`/`recv` API without topic routing. The implementation is notable for its minimalism: zero dependencies, a single source file, and a straightforward epoch-flip protocol.
 
 `bus` differs from Photon Ring in several respects. Its synchronization mechanism is epoch-based rather than seqlock-based: the producer writes to one buffer while consumers read from the other, then flips the epoch. This avoids torn reads entirely but requires double-buffering, which doubles memory usage. The `bus` documentation acknowledges busy-waiting as a limitation, noting that consumers spin-wait without any backoff or yield strategy. Photon Ring provides configurable wait strategies (`BusySpin`, `YieldSpin`, `BackoffSpin`, `Adaptive`) and uses architecture-specific instructions (`WFE` on aarch64, `PAUSE` on x86) to reduce power consumption during idle spins.
 
-No published cross-thread latency benchmarks are available for `bus`, making direct performance comparison difficult. In single-threaded microbenchmarks, Photon Ring's stamp-only fast path achieves 2.5 ns publish-plus-receive compared to approximately 15 ns for `bus`, though the difference in measurement methodology limits the significance of this comparison. `bus` does not support backpressure, topic routing, subscriber groups, or `no_std` environments.
+No published cross-thread latency benchmarks are available for `bus`, making direct performance comparison difficult. In single-threaded microbenchmarks, Photon Ring's stamp-only fast path achieves 2.5 ns publish-plus-receive compared to approximately 15 ns for `bus`, though the difference in measurement methodology limits the significance of this comparison. `bus` does not support backpressure, topic routing, or `no_std` environments.
 
 ### 6.6 crossbeam (Rust)
 
