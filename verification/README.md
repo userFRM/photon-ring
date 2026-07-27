@@ -191,9 +191,3 @@ This protocol introduces concerns (CAS retry fairness, livelock under
 high contention, correct stamp-based waiting) that are entirely absent
 from the single-producer model where the writer holds `&mut self` and
 sequence advancement is a plain increment.
-
-### SubscriberGroup
-
-The `SubscriberGroup` batched fanout is not modeled separately. It
-reuses the same `Slot::try_read` protocol as individual subscribers, so
-the existing reader actions cover its correctness at the slot level.

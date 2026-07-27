@@ -81,7 +81,7 @@ pub use barrier::DependencyBarrier;
 pub use bus::Photon;
 pub use channel::{
     channel, channel_bounded, channel_mpmc, Drain, MpPublisher, PublishError, Publisher,
-    Subscribable, Subscriber, SubscriberGroup, TryRecvError,
+    Subscribable, Subscriber, TryRecvError,
 };
 pub use event::{event_channel, EventPublisher, EventSubscribable, EventSubscriber};
 pub use pod::Pod;

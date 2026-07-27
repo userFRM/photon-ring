@@ -49,9 +49,9 @@ The design makes three further contributions beyond co-location:
 
 **The `T: Pod` constraint as a safety invariant.** Photon Ring requires that message types implement `Pod` (plain-old-data: every bit pattern is valid), which precludes heap-allocated types (`String`, `Vec`, `Box`) but enables a critical safety property: torn reads -- where the consumer reads a partially overwritten slot -- produce a bit pattern with no destructor, no pointer dereference, and no validity-invariant violation (for recommended payload types). The seqlock stamp check detects the inconsistency, and the torn value is silently discarded. This is the same principle underlying the Linux kernel's `seqlock_t`, where the restriction to plain-old-data types ensures that speculative reads cannot corrupt kernel state.
 
-**Full `no_std` compatibility.** The entire library, including the named-topic bus (`Photon<T>`), heterogeneous-type bus (`TypedBus`), batched subscriber groups (`SubscriberGroup<T, N>`), and all wait strategies, operates without the Rust standard library. The implementation depends only on `alloc` (for `Arc`, `Box`, and `Vec` at channel construction time) and two lightweight dependencies: `hashbrown` for the topic bus hash map and `spin` for internal mutexes. Wait strategies use `core::hint::spin_loop()` and inline assembly (`WFE` on aarch64), never OS primitives such as `futex` or thread parking.
+**Full `no_std` compatibility.** The entire library, including the named-topic bus (`Photon<T>`), heterogeneous-type bus (`TypedBus`), and all wait strategies, operates without the Rust standard library. The implementation depends only on `alloc` (for `Arc`, `Box`, and `Vec` at channel construction time) and two lightweight dependencies: `hashbrown` for the topic bus hash map and `spin` for internal mutexes. Wait strategies use `core::hint::spin_loop()` and inline assembly (`WFE` on aarch64), never OS primitives such as `futex` or thread parking.
 
-Benchmarks on an Intel Core i7-10700KF (Comet Lake, 8 cores, 3.8 GHz base) demonstrate 48 ns median one-way latency (measured via RDTSC timestamps embedded in the message payload), 96 ns cross-thread roundtrip latency, and a publish cost of approximately 2.8 ns per message. The 48 ns one-way figure is within 20% of the bare L3 snoop latency on this microarchitecture, indicating near-zero software overhead above the cache-coherence floor. The `SubscriberGroup<T, N>` batched fanout mechanism further reduces per-subscriber overhead from 1.1 ns (independent subscribers) to 0.2 ns (grouped subscribers), a 5.5x improvement achieved by performing a single seqlock read and sweeping N cursor increments in a compiler-unrolled loop.
+Benchmarks on an Intel Core i7-10700KF (Comet Lake, 8 cores, 3.8 GHz base) demonstrate 48 ns median one-way latency (measured via RDTSC timestamps embedded in the message payload), 96 ns cross-thread roundtrip latency, and a publish cost of approximately 2.8 ns per message. The 48 ns one-way figure is within 20% of the bare L3 snoop latency on this microarchitecture, indicating near-zero software overhead above the cache-coherence floor.
 
 ## 2. Background
 
@@ -347,51 +347,7 @@ Err(actual_stamp) => {
 
 This reduces per-message cache traffic from two cache-line loads to one. On Intel Comet Lake, each L3 snoop costs approximately 40--55 ns, so eliminating one snoop per message saves roughly 40 ns on the cross-thread path. The benchmark results confirm this: same-thread roundtrip latency dropped from 3.2 ns (v0.1.0) to 2.5 ns (v0.2.0), a 22% improvement attributable to removing the cursor load from the critical path.
 
-### 3.6 SubscriberGroup batched fanout
-
-`SubscriberGroup<T, const N: usize>` is a const-generic type that holds `N` logical subscriber cursors and performs a single seqlock read when all cursors are aligned -- the common case when all subscribers are polled in lockstep on the same thread.
-
-```rust
-pub struct SubscriberGroup<T: Pod, const N: usize> {
-    ring: Arc<SharedRing<T>>,
-    cursors: [u64; N],
-    ...
-}
-```
-
-The `try_recv` fast path checks whether the first cursor's slot is ready, and if so, sweeps all aligned cursors in a single pass:
-
-```rust
-pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
-    let first = self.cursors[0];
-    let slot = self.ring.slot(first);
-
-    match slot.try_read(first) {
-        Ok(Some(value)) => {
-            // Single seqlock read succeeded -- advance all aligned cursors.
-            for c in self.cursors.iter_mut() {
-                if *c == first {
-                    *c = first + 1;
-                }
-            }
-            ...
-            Ok(value)
-        }
-        ...
-    }
-}
-```
-
-The cost breakdown is:
-
-- **One seqlock read**: two `Acquire` loads (stamp before and after) plus one `read_volatile` of the payload. This is the expensive part -- it involves a cache-line transfer from the publisher's core.
-- **N cursor increments**: a compiler-unrolled loop over the `[u64; N]` array. For small `N` (constrained at compile time), LLVM unrolls this into `N` straight-line compare-and-increment operations that execute entirely in registers.
-
-The result is that fanout cost scales as O(1) seqlock reads + O(N) register operations, rather than O(N) seqlock reads. Benchmarks show 0.2 ns per subscriber for a `SubscriberGroup`, versus 1.1 ns per subscriber for independent `Subscriber` instances -- a 5.5x improvement. For a fanout of 10 subscribers, this translates to 4.3 ns total (group) versus 14 ns total (independent).
-
-The alignment check (`if *c == first`) handles the case where individual cursors have diverged due to per-subscriber lag recovery. When a lag event resets one cursor but not others, subsequent `try_recv` calls advance only the aligned subset, and the diverged cursors catch up independently.
-
-### 3.7 Backpressure mode
+### 3.6 Backpressure mode
 
 By default, Photon Ring channels are *lossy*: the publisher overwrites the oldest slot without checking whether any subscriber has read it. This is the zero-overhead path -- no per-publish checks, no shared state beyond the slot and cursor.
 
@@ -461,7 +417,7 @@ fn update_tracker(&self) {
 
 On lossy channels (`tracker` is `None`), the `update_tracker` call compiles to nothing -- zero overhead on the default path.
 
-### 3.8 Multi-producer extension
+### 3.7 Multi-producer extension
 
 `channel_mpmc()` creates a multi-producer, multi-consumer channel using `MpPublisher`, which is `Clone + Send + Sync`. The multi-producer protocol adapts the standard Disruptor multi-producer algorithm for the seqlock stamp encoding.
 
@@ -687,7 +643,6 @@ Single-threaded benchmarks isolate the instruction cost of publish and receive o
 | Struct roundtrip (24 B payload) | 4.7 ns | `Quote { f64, u64, u64 }` -- 24 B memcpy within single cache line |
 | Fanout: 1 independent sub | 2.8 ns | Baseline identical to single-sub roundtrip |
 | Fanout: 10 independent subs | 13 ns | ~1.1 ns per additional subscriber |
-| Fanout: 10 SubscriberGroup | 4.3 ns | ~0.2 ns per additional subscriber |
 
 The `publish`-only benchmark measures the write path in isolation: the consumer is allocated but never polled, so the ring never fills within a benchmark iteration. At 2.9 ns, the write path compiles to approximately 6 `mov` instructions on x86_64 (two stamp stores, one 8-byte payload store, one cursor store, plus the release fence which compiles to no additional instructions on x86 TSO). The 2.8 ns publish+recv figure is marginally lower than publish-only due to Criterion measurement noise at this resolution; the two figures are statistically indistinguishable.
 
@@ -761,30 +716,20 @@ This overhead is the expected cost of supporting multiple producers. In the SPMC
 
 ### 5.6 Fanout scaling analysis
 
-A key design goal of Photon Ring is efficient single-producer, multi-consumer fanout. We measure how per-message latency scales with the number of subscribers, comparing independent `Subscriber` instances against the batched `SubscriberGroup<T, N>` API.
+A key design goal of Photon Ring is efficient single-producer, multi-consumer fanout. We measure how per-message latency scales with the number of independent `Subscriber` instances polled on the same thread.
 
 **Table 7.** Fanout scaling (Machine A, same-thread, publish + recv all subs).
 
-| Subscribers | Independent subs | SubscriberGroup | Speedup |
-|---|---|---|---|
-| 1 | 2.8 ns | 2.8 ns | 1.0x |
-| 2 | 3.9 ns | 3.1 ns | 1.3x |
-| 5 | 7.2 ns | 3.5 ns | 2.1x |
-| 10 | 13.0 ns | 4.3 ns | 3.0x |
+| Subscribers | Latency |
+|---|---|
+| 1 | 2.8 ns |
+| 2 | 3.9 ns |
+| 5 | 7.2 ns |
+| 10 | 13.0 ns |
 
-**Per-subscriber marginal cost:**
+Linear regression over 1--10 subscribers gives a marginal cost of approximately 1.1 ns per additional subscriber.
 
-| Mode | Marginal cost per sub | Derived from |
-|---|---|---|
-| Independent subscribers | ~1.1 ns / sub | Linear regression on 1--10 subs |
-| SubscriberGroup | ~0.2 ns / sub | Linear regression on 1--10 subs |
-| Improvement factor | 5.5x | 1.1 / 0.2 |
-
-**Root cause analysis.** Because these benchmarks execute on a single thread, all data resides in L1d throughout. There is no cache-coherence traffic; the scaling cost is pure instruction overhead. For independent subscribers, each `try_recv()` call executes the full seqlock read protocol: two `stamp.load(Acquire)` operations (pre-read and post-read validation), one `read_volatile` of the payload, one cursor increment, and associated branch instructions. The 1.1 ns marginal cost per subscriber reflects these ~4--5 instructions per seqlock read.
-
-`SubscriberGroup<T, N>` eliminates N-1 redundant seqlock reads by exploiting the observation that when all N cursors are aligned (the common case for same-thread fanout), they all seek the same slot at the same sequence number. The group performs a single seqlock read (one stamp-load pair plus one payload copy), then advances all N cursors in a compiler-unrolled loop. Each cursor advance is a single `u64` increment (one `add` instruction), costing approximately 0.2 ns. The stamp loads and payload copy are performed exactly once regardless of N, making the seqlock overhead amortised to O(1) rather than O(N).
-
-**Projection.** Extrapolating the linear trend, a fanout of 100 independent subscribers would cost approximately 112 ns per message, while a `SubscriberGroup<T, 100>` would cost approximately 23 ns -- a 4.9x improvement. At 1,000 subscribers, the projected costs are 1,103 ns vs. 203 ns (5.4x). These projections assume the cursor array remains L1-resident; for very large N, L1d capacity evictions would introduce additional latency not captured by the linear model.
+**Root cause analysis.** Because these benchmarks execute on a single thread, all data resides in L1d throughout. There is no cache-coherence traffic; the scaling cost is pure instruction overhead. Each `try_recv()` call executes the full seqlock read protocol: two `stamp.load(Acquire)` operations (pre-read and post-read validation), one `read_volatile` of the payload, one cursor increment, and associated branch instructions. The 1.1 ns marginal cost per subscriber reflects these ~4--5 instructions per seqlock read.
 
 ### 5.7 Threats to validity
 
@@ -909,8 +854,6 @@ On the dynamic testing side, Loom [Tokio, 2019] -- the Rust concurrency testing 
 This paper presented Photon Ring, a seqlock-stamped ring buffer library for Rust that achieves 48 ns one-way inter-thread latency on commodity x86_64 hardware -- within approximately 20% of the cache-coherence protocol floor (34 ns minimum observed, compared to the approximately 40 ns L3 snoop latency on Intel Comet Lake).
 
 The core contribution is the stamp-in-slot co-location: by placing the seqlock stamp and the message payload in a single 64-byte cache line (`#[repr(C, align(64))]`), the consumer validates slot ownership and reads the data in a single cache-line transfer. This eliminates the sequence-barrier load that the Disruptor pattern requires on the consumer hot path, saving one L3-to-L1 snoop per message. Per-consumer local cursors -- plain `u64` values rather than shared atomics -- further eliminate all consumer-to-consumer cache-line contention.
-
-The `SubscriberGroup<T, N>` mechanism extends this efficiency to multi-consumer workloads: when N consumers are polled on the same thread, the seqlock is read once and all N cursors are advanced in a compiler-unrolled loop, reducing per-subscriber fanout cost from 1.1 ns (independent subscribers) to 0.2 ns (grouped), a 5.5x improvement.
 
 These gains come with explicit tradeoffs. The `T: Pod` bound restricts payloads to plain-old-data types, excluding heap-allocated types such as `String` and `Vec`. The default mode is lossy: when the ring wraps, slow consumers miss messages rather than blocking the producer. The seqlock read protocol involves a concurrent non-atomic memory access that is technically undefined behavior under the C++20 and Rust abstract memory models, though it is universally relied upon in practice -- from the Linux kernel to Facebook's Folly library -- and functions correctly on all mainstream hardware for `Copy` types without validity invariants.
 

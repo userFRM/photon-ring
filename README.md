@@ -135,7 +135,6 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
   Publish only                        2.8 ns      2.4 ns
   Roundtrip (1 sub, same thread)      2.7 ns      8.8 ns
   Fanout (10 independent subs)       17.0 ns     27.7 ns
-  SubscriberGroup (any N, O(1))       2.6 ns      8.8 ns
   MPMC (1 pub, 1 sub)                12.1 ns     10.6 ns
   Empty poll                          0.9 ns      1.1 ns
   Batch 64 + drain                    158 ns      282 ns
@@ -213,7 +212,7 @@ Photon Ring is for streams where every subscriber should observe every message w
 
 Channels are the lowest-level interface. `channel::<T>(capacity)` creates the fastest single-producer path and returns a `Publisher<T>` plus a cloneable `Subscribable<T>`. `channel_bounded::<T>(capacity, watermark)` adds optional backpressure; `Publisher::try_publish` returns `PublishError::Full(value)` instead of overwriting unread slots. `channel_mpmc::<T>(capacity)` returns `MpPublisher<T>`, which is `Clone + Send + Sync` and uses atomic sequence claiming for concurrent producers. On the write side, the important APIs are `publish`, `publish_with` for in-place construction, `publish_batch` on `Publisher`, and `published`/`capacity` for lightweight counters.
 
-Subscribers are independent and contention-free by default. `Subscribable::subscribe()` starts from future messages only, while `subscribe_from_oldest()` starts at the oldest message still retained in the ring. `Subscriber<T>` exposes `try_recv`, `recv`, `recv_with`, `latest`, `pending`, `recv_batch`, and `drain`, plus observability counters through `total_received`, `total_lagged`, and `receive_ratio`. If multiple logical consumers are polled on the same thread, `subscribe_group::<N>()` creates a `SubscriberGroup<T, N>` that performs one ring read for the whole group instead of one per logical subscriber.
+Subscribers are independent and contention-free by default. `Subscribable::subscribe()` starts from future messages only, while `subscribe_from_oldest()` starts at the oldest message still retained in the ring. `Subscriber<T>` exposes `try_recv`, `recv`, `recv_with`, `latest`, `pending`, `recv_batch`, and `drain`, plus observability counters through `total_received`, `total_lagged`, and `receive_ratio`.
 
 For topic routing, `Photon<T>` provides a string-keyed bus where all topics share the same payload type, and `TypedBus` allows a different `T: Pod` per topic. Both lazily create topics and expose `publisher`, `try_publisher`, `subscribe`, and `subscribable`. `publisher()` will panic if the publisher for that topic was already taken, and `TypedBus` also panics on type mismatches for an existing topic.
 
@@ -227,7 +226,7 @@ Wait behavior is explicit. `recv_with` accepts `WaitStrategy::BusySpin`, `YieldS
 
 ### Companion crates
 
-- **[`photon-ring-async`](photon-ring-async/)** — Runtime-agnostic async wrappers. `AsyncSubscriber` and `AsyncSubscriberGroup` with yield-based polling and configurable spin budget. Works with tokio, smol, embassy, or any executor.
+- **[`photon-ring-async`](photon-ring-async/)** — Runtime-agnostic async wrappers. `AsyncSubscriber` with yield-based polling and configurable spin budget. Works with tokio, smol, embassy, or any executor.
 - **[`photon-ring-metrics`](photon-ring-metrics/)** — Observability wrappers with `SubscriberMetrics` (snapshot/delta tracking) and `PublisherMetrics`. Framework-agnostic — bring your own prometheus/opentelemetry.
 
 ## Design constraints

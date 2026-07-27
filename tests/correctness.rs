@@ -779,40 +779,6 @@ fn receive_ratio() {
     assert!((sub.receive_ratio() - 0.5).abs() < f64::EPSILON);
 }
 
-#[test]
-fn group_counters() {
-    let (mut p, s) = channel::<u64>(4);
-    let mut group = s.subscribe_group::<2>();
-
-    assert_eq!(group.total_received(), 0);
-    assert_eq!(group.total_lagged(), 0);
-    assert_eq!(group.receive_ratio(), 0.0);
-
-    // Normal receives — no lag.
-    for i in 0..4 {
-        p.publish(i);
-    }
-    for _ in 0..4 {
-        group.try_recv().unwrap();
-    }
-    assert_eq!(group.total_received(), 4);
-    assert_eq!(group.total_lagged(), 0);
-    assert!((group.receive_ratio() - 1.0).abs() < f64::EPSILON);
-
-    // Cause lag: publish 8 more into a 4-slot ring without reading.
-    for i in 10..18 {
-        p.publish(i);
-    }
-
-    // First try_recv should detect lag.
-    let err = group.try_recv().unwrap_err();
-    match err {
-        TryRecvError::Lagged { skipped } => assert!(skipped > 0),
-        other => panic!("expected Lagged, got {other:?}"),
-    }
-    assert!(group.total_lagged() > 0);
-}
-
 // -------------------------------------------------------------------------
 // Bug fix: publish() respects backpressure on bounded channels
 // -------------------------------------------------------------------------
@@ -947,102 +913,6 @@ fn subscriber_drop_unblocks_other_subscribers() {
 
     // Now the publisher is gated only by the fast reader.
     p.try_publish(99).unwrap();
-}
-
-// -------------------------------------------------------------------------
-// Bug fix: SubscriberGroup participates in backpressure
-// -------------------------------------------------------------------------
-
-#[test]
-fn subscriber_group_bounded_channel_basic() {
-    let (mut p, s) = channel_bounded::<u64>(4, 0);
-    let mut group = s.subscribe_group::<2>();
-
-    // Publish and receive normally.
-    for i in 0..4 {
-        p.try_publish(i).unwrap();
-    }
-
-    // Ring is full — group tracker should block the publisher.
-    assert_eq!(p.try_publish(99), Err(PublishError::Full(99)));
-
-    // Drain one — frees one slot.
-    assert_eq!(group.try_recv(), Ok(0));
-    p.try_publish(99).unwrap();
-
-    // Drain the rest.
-    assert_eq!(group.try_recv(), Ok(1));
-    assert_eq!(group.try_recv(), Ok(2));
-    assert_eq!(group.try_recv(), Ok(3));
-    assert_eq!(group.try_recv(), Ok(99));
-    assert_eq!(group.try_recv(), Err(TryRecvError::Empty));
-}
-
-#[test]
-fn subscriber_group_drop_releases_backpressure() {
-    let (mut p, s) = channel_bounded::<u64>(4, 0);
-    let group = s.subscribe_group::<2>();
-
-    // Fill the ring.
-    for i in 0..4 {
-        p.try_publish(i).unwrap();
-    }
-
-    // Group tracker should block.
-    assert_eq!(p.try_publish(99), Err(PublishError::Full(99)));
-
-    // Drop the group — tracker should be deregistered.
-    drop(group);
-
-    // Publisher should be free now.
-    p.try_publish(99).unwrap();
-}
-
-#[test]
-fn subscriber_group_bounded_cross_thread() {
-    let (mut p, s) = channel_bounded::<u64>(64, 0);
-    let mut group = s.subscribe_group::<3>();
-    let n = 10_000u64;
-
-    let writer = std::thread::spawn(move || {
-        for i in 0..n {
-            p.publish(i);
-        }
-    });
-
-    let reader = std::thread::spawn(move || {
-        for expected in 0..n {
-            loop {
-                match group.try_recv() {
-                    Ok(v) => {
-                        assert_eq!(
-                            v, expected,
-                            "subscriber group bounded corruption at seq {expected}"
-                        );
-                        break;
-                    }
-                    Err(TryRecvError::Empty) => core::hint::spin_loop(),
-                    Err(TryRecvError::Lagged { .. }) => {
-                        panic!("bounded channel subscriber group should never lag");
-                    }
-                }
-            }
-        }
-    });
-
-    writer.join().unwrap();
-    reader.join().unwrap();
-}
-
-// -------------------------------------------------------------------------
-// Bug fix: subscribe_group::<0>() must panic
-// -------------------------------------------------------------------------
-
-#[test]
-#[should_panic(expected = "SubscriberGroup requires at least 1 subscriber")]
-fn subscribe_group_zero_panics() {
-    let (_p, s) = channel::<u64>(4);
-    let _group = s.subscribe_group::<0>();
 }
 
 // -------------------------------------------------------------------------
@@ -1436,23 +1306,6 @@ fn recv_batch_basic() {
     // Remaining slots untouched.
     for val in &buf[10..20] {
         assert_eq!(*val, 0);
-    }
-}
-
-#[test]
-fn recv_batch_subscriber_group() {
-    let (mut p, s) = channel::<u64>(64);
-    let mut group = s.subscribe_group::<2>();
-
-    for i in 0..8 {
-        p.publish(i);
-    }
-
-    let mut buf = [0u64; 16];
-    let count = group.recv_batch(&mut buf);
-    assert_eq!(count, 8);
-    for (i, val) in buf.iter().enumerate().take(8) {
-        assert_eq!(*val, i as u64);
     }
 }
 
@@ -1923,22 +1776,6 @@ fn arbitrary_capacity_mpmc_stress() {
 
     let count = reader.join().unwrap();
     assert_eq!(count, total, "reader saw {count} of {total}");
-}
-
-#[test]
-fn arbitrary_capacity_subscriber_group() {
-    // Subscriber group with non-power-of-two capacity.
-    let (mut p, s) = channel::<u64>(100);
-    let mut group = s.subscribe_group::<3>();
-
-    for i in 0..50 {
-        p.publish(i);
-    }
-
-    for i in 0..50 {
-        assert_eq!(group.try_recv(), Ok(i));
-    }
-    assert_eq!(group.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[test]

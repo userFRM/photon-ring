@@ -713,8 +713,6 @@ Write protocol:                Read protocol:
         <div class="feature-desc">
           Every subscriber sees every message. Fanout to 10 independent
           subscribers costs 17 ns total (Intel) &mdash; 1.7 ns per subscriber.
-          <code>SubscriberGroup</code> batches N logical consumers into a
-          single seqlock read, cutting that to 0.2 ns each.
         </div>
       </div>
       <div class="feature-card">
@@ -830,12 +828,6 @@ Write protocol:                Read protocol:
             <td class="td-label">Fanout (10 subscribers)</td>
             <td class="td-best">17.0 ns</td>
             <td class="td-best">27.7 ns</td>
-            <td class="td-num">&mdash;</td>
-          </tr>
-          <tr>
-            <td class="td-label">SubscriberGroup read</td>
-            <td class="td-best">2.6 ns</td>
-            <td class="td-best">8.8 ns</td>
             <td class="td-num">&mdash;</td>
           </tr>
           <tr>
