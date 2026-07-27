@@ -982,7 +982,7 @@ Write protocol:                Read protocol:
             <td>None</td><td>Point-to-point: one receiver owns each message</td>
           </tr>
           <tr>
-            <td class="td-label">Shared sequence barrier</td><td>Sequence claim + barrier</td>
+            <td class="td-label">Shared sequence barrier</td><td>Sequence claim, then a fold over every consumer's position</td>
             <td>Barrier spin</td><td>None</td><td>Ordered pipelines with dependent stages</td>
           </tr>
           <tr>
@@ -995,10 +995,13 @@ Write protocol:                Read protocol:
     </div>
     <p class="note-inline mb-32">
       Pre-allocated rings are what removed allocator overhead from this problem, and
-      the shared sequence barrier is the classic way to order consumers on one. Moving
-      validation into each slot trades that ordering for independence: subscribers keep
-      private cursors and never contend, which is what makes per-consumer delivery
-      contracts and hot attach possible.
+      the shared sequence barrier is the classic way to order consumers on one: every
+      consumer publishes its position, and the producer folds them into a minimum before
+      it may overwrite a slot. That is cheap with one consumer and grows with the audience.
+      Moving validation into each slot trades the ordering for independence &mdash; subscribers
+      keep private cursors and never consult one another &mdash; which is also what makes
+      per-consumer delivery contracts, dead-consumer recovery and hot attach possible,
+      since there is no shared minimum for a stalled consumer to poison.
     </p>
 
     <!-- Fanout scaling -->
@@ -1022,15 +1025,15 @@ Write protocol:                Read protocol:
             <td class="td-best">1.5 ns</td>
           </tr>
           <tr>
-            <td class="td-label">Shared-ring broadcast</td>
+            <td class="td-label"><code>tokio::sync::broadcast</code> 1.53</td>
             <td>47.7</td><td>65.5</td><td>99.2</td><td>167.3</td><td>306.9</td><td>579.6</td><td>17.2 ns</td>
           </tr>
           <tr>
-            <td class="td-label">Point-to-point queue, one per consumer</td>
+            <td class="td-label"><code>crossbeam-channel</code> 0.5, one per consumer</td>
             <td>22.3</td><td>44.3</td><td>87.8</td><td>176.5</td><td>351.3</td><td>701.9</td><td>21.9 ns</td>
           </tr>
           <tr>
-            <td class="td-label">Point-to-point queue, one per consumer (alt)</td>
+            <td class="td-label"><code>flume</code> 0.11, one per consumer</td>
             <td>27.4</td><td>53.9</td><td>108.7</td><td>217.6</td><td>428.4</td><td>859.3</td><td>26.8 ns</td>
           </tr>
         </tbody>
@@ -1045,6 +1048,53 @@ Write protocol:                Read protocol:
       on a queue that does not do broadcast, rather than a race those libraries lost. They
       solve the different and equally real problem of exactly one receiver owning each message.
       Reproduce with <code>cargo bench --bench fanout_scaling</code>.
+    </div>
+
+    <!-- Cross-thread fanout -->
+    <h3 class="mb-8" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Cross-thread fanout</h3>
+    <p class="note-inline mb-16">
+      The table above isolates protocol cost in cache. This is the deployed shape: one
+      producer, N consumer threads on their own cores, 100k messages, every consumer
+      accounting for all of them. Total milliseconds, lower is better.
+    </p>
+    <div class="table-wrapper mb-16">
+      <table>
+        <thead>
+          <tr><th>Library</th><th>Delivery</th><th>N=1</th><th>N=2</th><th>N=4</th><th>N=8</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td-label">Photon Ring</td><td>lossless</td>
+            <td>0.49</td><td class="td-best">0.52</td><td class="td-best">0.58</td><td class="td-best">2.62</td>
+          </tr>
+          <tr>
+            <td class="td-label"><code>disruptor</code> 4.0</td><td>lossless</td>
+            <td class="td-best">0.45</td><td>2.94</td><td>6.99</td><td>12.15</td>
+          </tr>
+          <tr>
+            <td class="td-label"><code>crossbeam-channel</code> 0.5, one per consumer</td><td>lossless</td>
+            <td>1.39</td><td>14.90</td><td>27.92</td><td>46.79</td>
+          </tr>
+          <tr>
+            <td class="td-label"><code>tokio::sync::broadcast</code> 1.53</td><td>lossy</td>
+            <td>8.23</td><td>8.61</td><td>33.86</td><td>119.47</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout callout-warn mb-32">
+      <strong>Where this crate loses, and what is not established:</strong>
+      at a single consumer <code>disruptor</code> is faster. Its consumers coordinate through
+      a shared sequence barrier, and with one consumer there is nothing to coordinate, so the
+      barrier costs nothing while this crate still pays for its per-slot stamps. From two
+      consumers onward the producer must fold every consumer's position into a minimum before
+      it may publish, and that cost grows with the audience.
+      Separately, the jump in this crate's own N=8 figure is not established as architectural:
+      that run put nine threads on a sixteen-thread machine that was not otherwise idle, and it
+      needs a pinned rerun on a quiet box. And the lossy row is not comparable to the three
+      lossless ones &mdash; it drops under pressure instead of applying backpressure, so compare
+      it against this crate's lossy <code>channel()</code> rather than <code>channel_bounded()</code>.
+      Reproduce with <code>cargo bench --bench fanout_threaded</code>.
     </div>
 
     <!-- Capabilities -->

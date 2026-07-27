@@ -44,21 +44,25 @@ fn fanout(c: &mut Criterion) {
             });
         });
 
-        g.bench_with_input(BenchmarkId::new("tokio-broadcast", n), &n, |b, &n| {
-            let (tx, _) = tokio::sync::broadcast::channel::<u64>(RING);
-            let mut rxs: Vec<_> = (0..n).map(|_| tx.subscribe()).collect();
-            let mut i = 0u64;
-            b.iter(|| {
-                tx.send(black_box(i)).unwrap();
-                for rx in rxs.iter_mut() {
-                    black_box(rx.try_recv().unwrap());
-                }
-                i = i.wrapping_add(1);
-            });
-        });
+        g.bench_with_input(
+            BenchmarkId::new("tokio::sync::broadcast", n),
+            &n,
+            |b, &n| {
+                let (tx, _) = tokio::sync::broadcast::channel::<u64>(RING);
+                let mut rxs: Vec<_> = (0..n).map(|_| tx.subscribe()).collect();
+                let mut i = 0u64;
+                b.iter(|| {
+                    tx.send(black_box(i)).unwrap();
+                    for rx in rxs.iter_mut() {
+                        black_box(rx.try_recv().unwrap());
+                    }
+                    i = i.wrapping_add(1);
+                });
+            },
+        );
 
         g.bench_with_input(
-            BenchmarkId::new("crossbeam-per-consumer", n),
+            BenchmarkId::new("crossbeam-channel (one per consumer)", n),
             &n,
             |b, &n| {
                 let pairs: Vec<_> = (0..n)
@@ -77,19 +81,23 @@ fn fanout(c: &mut Criterion) {
             },
         );
 
-        g.bench_with_input(BenchmarkId::new("flume-per-consumer", n), &n, |b, &n| {
-            let pairs: Vec<_> = (0..n).map(|_| flume::bounded::<u64>(RING)).collect();
-            let mut i = 0u64;
-            b.iter(|| {
-                for (tx, _) in pairs.iter() {
-                    tx.send(black_box(i)).unwrap();
-                }
-                for (_, rx) in pairs.iter() {
-                    black_box(rx.try_recv().unwrap());
-                }
-                i = i.wrapping_add(1);
-            });
-        });
+        g.bench_with_input(
+            BenchmarkId::new("flume (one per consumer)", n),
+            &n,
+            |b, &n| {
+                let pairs: Vec<_> = (0..n).map(|_| flume::bounded::<u64>(RING)).collect();
+                let mut i = 0u64;
+                b.iter(|| {
+                    for (tx, _) in pairs.iter() {
+                        tx.send(black_box(i)).unwrap();
+                    }
+                    for (_, rx) in pairs.iter() {
+                        black_box(rx.try_recv().unwrap());
+                    }
+                    i = i.wrapping_add(1);
+                });
+            },
+        );
     }
     g.finish();
 }
