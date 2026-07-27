@@ -1236,7 +1236,7 @@ fn mpmc_stress() {
 }
 
 #[test]
-fn mpmc_more_publishers_than_capacity() {
+fn mpmc_stress_more_publishers_than_capacity() {
     // With more publishes in flight than the ring has slots, two producers
     // hold sequence numbers one lap apart — the same slot. The publisher must
     // wait for the previous lap's write to that slot to finish before writing,
