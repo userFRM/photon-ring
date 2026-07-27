@@ -25,6 +25,13 @@ use photon_ring::{Pod, Subscriber, TryRecvError};
 ///   (~200-500 ns).
 /// - **Default** (64): matches the bare-spin phase of
 ///   [`Subscriber::recv()`](Subscriber::recv).
+///
+/// # Idle cost
+///
+/// Every empty poll re-registers the waker, so a task awaiting an idle
+/// channel is re-polled continuously and holds one core at 100% until a
+/// message arrives. See the crate-level docs for when that trade is right
+/// and what to use when it is not.
 pub struct AsyncSubscriber<T: Pod> {
     inner: Subscriber<T>,
     spin_budget: u32,

@@ -10,6 +10,14 @@ the current wish list, roughly in priority order.
   multi-socket Xeon benchmark quantifying pinned vs unpinned placement.
 - RISC-V `WRS` (wait-on-reservation-set) as a `WaitStrategy` backend where available.
 
+## Async
+
+- Event-driven wakeup for `photon-ring-async`, so an idle `AsyncSubscriber`
+  parks instead of holding a core. Needs a waker registry on the ring and a
+  publish-side check (one relaxed load when nobody waits), plus a loom model
+  of the register-versus-publish race. Until then the crate is honest about
+  being a polling adapter.
+
 ## Observability
 
 - Optional RDTSC-stamped latency histogram on the receive path.

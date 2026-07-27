@@ -15,8 +15,19 @@
 //!
 //! This is *not* event-driven wakeup. It is cooperative spin-polling with
 //! periodic yields. The trade-off: slightly higher latency than bare spin
-//! (one async scheduling round-trip per yield, ~200-500 ns on tokio), but
-//! the executor can run other tasks between polls instead of burning a core.
+//! (one async scheduling round-trip per yield, ~200-500 ns on tokio), and
+//! other tasks get to run between polls — but the waiting task re-registers
+//! its waker on every empty poll, so it never goes to sleep.
+//!
+//! **Idle cost.** A task awaiting an idle channel stays permanently runnable:
+//! the executor re-polls it in a loop, keeping one core at 100% for as long
+//! as no message arrives. Other tasks on the runtime still make progress
+//! (each poll yields), but the CPU never idles. This is the right trade for
+//! streams that are rarely quiet — market data, telemetry under load — and
+//! the wrong one for workloads that sit idle. For those, run the subscriber
+//! on a dedicated thread (`photon_ring::topology::Consumer` with a parking
+//! [`WaitStrategy`](photon_ring::WaitStrategy)) and hand results to your
+//! runtime through its own notification-based channel.
 //!
 //! **No runtime dependency.** This crate uses only `core::task::{Context,
 //! Poll, Waker}` and `core::future::poll_fn`. It works with tokio, smol,
