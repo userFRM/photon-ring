@@ -132,6 +132,21 @@ jobs:
           --test atomic_slots --test atomic_slots_payload_sizes
         timeout-minutes: 30
 
+  # ── Doc links and doc warnings ───────────────────────────────────────
+  #
+  # Intra-doc links rot silently: they break on a rename and nothing fails.
+  # 18 were broken before this gate existed.
+  docs:
+    name: rustdoc
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --all-features --no-deps
+
   # ── Loom: exhaustive interleaving checks on the concurrency protocols ──
   #
   # These models encode the MPMC cursor protocol and the bounded-channel
@@ -237,7 +252,7 @@ jobs:
   # ── Publish to crates.io (only on tagged releases) ───────────────────
   publish:
     name: publish
-    needs: [check, test, clippy, fmt, miri, miri-atomic-slots, loom, cross-platform, wasm, hugepages, atomic-slots, async-crate, metrics-crate]
+    needs: [check, test, clippy, fmt, docs, miri, miri-atomic-slots, loom, cross-platform, wasm, hugepages, atomic-slots, async-crate, metrics-crate]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
