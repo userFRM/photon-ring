@@ -89,35 +89,17 @@ jobs:
         with:
           components: miri
       - uses: Swatinem/rust-cache@v2
-      # The default build is data-race-free, so the multi-threaded tests that
-      # previously had to be skipped now run. Only the long stress tests are
-      # excluded, because Miri interprets rather than executes.
+      # This is the gate behind the crate's soundness claim. The default build
+      # is data-race-free, so the multi-threaded tests that previously had to be
+      # skipped now run and must be completely clean. Only the long stress tests
+      # are excluded, because Miri interprets rather than executes. Iteration
+      # counts scale themselves down under cfg(miri); see tests/atomic_slots.rs.
       - run: >
-          cargo +nightly miri test --test correctness --
+          cargo +nightly miri test
+          --test correctness --test atomic_slots --test atomic_slots_payload_sizes --
           --skip stress_1m
           --skip mpmc_stress
           --skip arbitrary_capacity_stress
-        timeout-minutes: 30
-
-  # ── Miri on atomic-slots (the formally sound slot implementation) ────
-  #
-  # This is the gate behind the crate's soundness claim. Unlike the `miri` job
-  # above — which runs the default volatile slots single-threaded, where the
-  # deliberate seqlock data race is expected — this runs the atomic-slots
-  # implementation with its multi-threaded tests, and must be completely clean.
-  # Iteration counts scale themselves down under cfg(miri); see tests/atomic_slots.rs.
-  miri-atomic-slots:
-    name: miri (atomic-slots)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: miri
-      - uses: Swatinem/rust-cache@v2
-      - run: >
-          cargo +nightly miri test --features atomic-slots
-          --test atomic_slots --test atomic_slots_payload_sizes
         timeout-minutes: 30
 
   # ── Doc links and doc warnings ───────────────────────────────────────
@@ -240,7 +222,7 @@ jobs:
   # ── Publish to crates.io (only on tagged releases) ───────────────────
   publish:
     name: publish
-    needs: [check, test, clippy, fmt, docs, miri, miri-atomic-slots, loom, cross-platform, wasm, hugepages, volatile-slots, async-crate, metrics-crate]
+    needs: [check, test, clippy, fmt, docs, miri, loom, cross-platform, wasm, hugepages, volatile-slots, async-crate, metrics-crate]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.0] - 2026-07-27
 
 ### Added
 - **`event_channel` — a ring for payloads that are not `Pod`.** `String`, `Vec`,
@@ -177,12 +177,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   case is closed by removing the multi-field tuple impls (see Removed); a
   hand-written `unsafe impl Pod` for a padded struct remains the implementor's
   responsibility, which the `miri (atomic-slots)` job is there to catch.
-- **`atomic-slots` is now covered by Miri in CI** (`miri (atomic-slots)` job). The
-  existing `miri` job runs the default volatile slots single-threaded with all
-  cross-thread tests skipped, so it could never have caught the above; the
-  soundness claim was documented but ungated. Iteration counts scale down under
-  `cfg(miri)`, and one lossy-ring liveness assertion is scoped to non-Miri runs
-  where the scheduler makes it meaningful.
+- **The slot implementation is now covered by Miri in CI.** The `miri` job
+  previously ran single-threaded with every cross-thread test skipped, so it
+  could never have caught the above; the soundness claim was documented but
+  ungated. It now runs the multi-threaded correctness and slot tests and must be
+  clean. Iteration counts scale down under `cfg(miri)`, and two lossy-ring
+  liveness assertions are scoped to non-Miri runs, where the scheduler makes
+  them meaningful.
 - **Two MPMC publishers could write the same slot concurrently.** Sequence
   claiming via `fetch_add` is unbounded, so with more publishes in flight than
   the ring has slots — more than `capacity` threads inside `publish` at once —

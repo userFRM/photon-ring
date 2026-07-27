@@ -452,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "photon-ring"
-version = "2.5.0"
+version = "3.0.0"
 dependencies = [
  "core_affinity2",
  "criterion",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "photon-ring-async"
-version = "2.5.0"
+version = "3.0.0"
 dependencies = [
  "photon-ring",
  "pollster",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "photon-ring-derive"
-version = "2.5.0"
+version = "3.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "photon-ring-metrics"
-version = "2.5.0"
+version = "3.0.0"
 dependencies = [
  "photon-ring",
 ]

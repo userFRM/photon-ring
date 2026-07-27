@@ -132,22 +132,24 @@ cargo bench --bench throughput
 cargo bench --bench payload_scaling
 ```
 
-### Comparing `atomic-slots` vs default (volatile) slot implementation
+### Comparing the default (`atomic-slots`) against the volatile slot implementation
 
-To verify that the `atomic-slots` feature has zero performance regression on
-your hardware, run the throughput benchmark with and without the feature:
+To verify on your own hardware that the default costs nothing against the older
+volatile path, run the throughput benchmark with and without default features:
 
 ```bash
-# Default (volatile-based slots)
+# Default: AtomicU64 stripe-based slots
 cargo bench --bench throughput
 
-# Atomic-slots (AtomicU64 stripe-based slots)
-cargo bench --bench throughput --features atomic-slots
+# Volatile slots
+cargo bench --bench throughput --no-default-features
 ```
 
-On x86-64, the two runs should produce identical results (same MOV instructions).
-On ARM64, expect ~5-10ns additional reader latency due to one extra `DMB ISHLD`
-barrier.
+On x86-64 the two lower to the same `MOV` instructions and measure
+indistinguishably: back to back on an i7-10700KF, publish came out at 3.36 ns
+atomic against 3.39 ns volatile, and publish-and-receive at 4.27 against 4.20 —
+both gaps inside run-to-run noise. On ARM64 both paths pay the same reader-side
+`DMB ISHLD`, so neither is cheaper there either.
 
 Results are written to `target/criterion/` as JSON and HTML reports.
 

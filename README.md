@@ -111,7 +111,7 @@ Sequence numbers are shared by every subscriber on a ring, so consumers with dif
 
 ```toml
 [dependencies]
-photon-ring = "2.5.0"
+photon-ring = "3.0.0"
 ```
 
 Optional features:
@@ -377,12 +377,12 @@ forbids padding. For your own structs, use `#[repr(C)]`, stick to `Pod` fields, 
 
 Photon Ring offers two slot implementations, selectable at compile time:
 
-| | Default (volatile) | `atomic-slots` feature |
+| | Default (`atomic-slots`) | `default-features = false` |
 |---|---|---|
-| **Mechanism** | `write_volatile` / `read_volatile` | `AtomicU64::store/load(Relaxed)` stripes |
-| **Formal status** | Data race under Rust abstract machine (practical UB) | **Formally sound** — no data races |
-| **Miri** | Flags multi-threaded tests | **Passes, enforced in CI** |
-| **x86-64 cost** | Baseline | **Zero** — identical `MOV` instructions |
+| **Mechanism** | `AtomicU64::store/load(Relaxed)` stripes | `write_volatile` / `read_volatile` |
+| **Formal status** | **Formally sound** — no data races | Data race under Rust abstract machine (practical UB) |
+| **Miri** | **Passes, enforced in CI** | Flags multi-threaded tests |
+| **x86-64 cost** | Identical `MOV` instructions; measured indistinguishable | Baseline |
 | **ARM64 cost** | One `DMB ISHLD` reader fence (both paths) | Same fence — no additional cost |
 | **Precedent** | Same pattern as Linux kernel seqlocks (20+ years) | Per-word atomic decomposition, as in `atomic-memcpy` |
 
