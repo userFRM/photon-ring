@@ -90,6 +90,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Crate packages exclude `docs/`, `verification/`, and `scripts/`.
 
 ### Fixed
+- **`WaitStrategy::MonitorWait` let safe code hand the wait path a raw pointer.**
+  The variant carried a `*const u8` in a public enum, so safe code could put any
+  address in it and pass it to `recv_with`; a safety precondition on a safe
+  constructor is not enforceable. Removed. `MonitorWaitFallback` provides the
+  same near-zero-power wait via `TPAUSE`, needs no address, and is sound.
+  **Breaking.**
+- **The `Message` derive accepted fields that are not `Pod`.** An array field
+  passed through unchecked, so `[bool; 2]` produced a wire struct carrying an
+  `unsafe impl Pod` it did not deserve. Every passthrough field is now proven
+  `Pod` at compile time, which also rejects aliases that merely look like
+  primitives.
 - **`publish_with` could invoke undefined behaviour from safe code.** It handed
   the closure a `&mut MaybeUninit<T>` and then assumed initialisation
   unconditionally, so `publish_with(|_| {})` read uninitialised memory. `T: Pod`
@@ -106,8 +117,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads the value as integer chunks; the generated wire structs routinely had it,
   which Miri reports as undefined behaviour. `DerivePod` now proves at compile
   time that a type's size equals the sum of its field sizes, and `DeriveMessage`
-  emits fields widest-first with explicit tail padding so the generated layout is
-  padding-free by construction. Wire structs gain a `_pad` field.
+  emits fields widest-first with explicit tail padding. Ordering closes the gaps
+  the macro can see; where a type alias hides a field's width the size assertion
+  still fails the build rather than letting it through. Wire structs gain a
+  `_pad` field.
   **Breaking** for code that names wire struct fields positionally.
 - **The examples taught padded `Pod` impls.** Reordered widest-first, with
   explicit padding where ordering alone cannot close the gap.

@@ -197,6 +197,11 @@ fn type_name(ty: &Type) -> Option<String> {
 /// the macro cannot size (arrays, user aliases) rank widest, since placing them
 /// first cannot introduce a gap ahead of a narrower field.
 fn align_rank(ty: &Type) -> u8 {
+    // An array's alignment is its element's, so rank it that way; ranking it
+    // widest would place `[u8; 3]` ahead of a `u64` and open an internal gap.
+    if let Type::Array(a) = ty {
+        return align_rank(&a.elem);
+    }
     match type_name(ty).as_deref() {
         Some("u128") | Some("i128") => 0,
         Some("u64") | Some("i64") | Some("f64") | Some("usize") | Some("isize") => 1,
@@ -419,6 +424,16 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
 
         match kind {
             FieldKind::Passthrough => {
+                // A passthrough field lands in the wire struct unchanged, and the
+                // wire struct gets `unsafe impl Pod`. Prove the field really is
+                // Pod: `[bool; 2]` and an alias that merely looks like a
+                // primitive would otherwise ride through on syntax alone.
+                assertions.push(quote! {
+                    const _: () = {
+                        fn _assert_pod<T: photon_ring::Pod>() {}
+                        fn _check() { _assert_pod::<#fty>(); }
+                    };
+                });
                 wire_fields.push(quote! { pub #fname: #fty });
                 wire_types.push(quote!(#fty));
                 wire_ranks.push(align_rank(fty));
@@ -653,9 +668,10 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
             assert!(
                 core::mem::size_of::<#wire_name>() == sum,
                 "photon-ring: the generated wire struct has internal padding, which \
-                 is not a valid Pod. This happens when a passthrough field is wider \
-                 than the fields the macro places before it; order the source \
-                 struct's fields widest first.",
+                 is not a valid Pod. The macro orders fields by width, but cannot \
+                 see through a type alias, so one of them landed out of order. \
+                 Use a concrete primitive or array type for that field, or add an \
+                 explicit padding field to close the gap.",
             );
         };
 

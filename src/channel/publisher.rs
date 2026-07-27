@@ -89,7 +89,7 @@ impl<T: Pod> Publisher<T> {
         self.seq += 1;
     }
 
-    /// Publish by writing directly into the slot via a closure.
+    /// Publish a value built by a closure.
     ///
     /// The closure returns the value, so it cannot leave the payload partly
     /// initialised; it is built as a stack temporary and then written to the

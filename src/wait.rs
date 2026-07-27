@@ -12,7 +12,7 @@
 //! | `YieldSpin` | Low (~30 ns on x86) | High | Shared cores, SMT |
 //! | `BackoffSpin` | Medium (exponential) | Decreasing | Background consumers |
 //! | `Adaptive` | Auto-scaling | Varies | General purpose |
-//! | `MonitorWait` | Near-zero (~30 ns on Intel) | Near-zero | Intel Alder Lake+ |
+//! | `MonitorWaitFallback` | Near-zero (~30 ns on Intel) | Near-zero | Intel Alder Lake+ |
 //!
 //! # Platform-specific optimizations
 //!
@@ -26,7 +26,7 @@
 //! On **x86/x86_64**, `core::hint::spin_loop()` emits `PAUSE`, which is the
 //! standard spin-wait hint (~140 cycles on Skylake+).
 //!
-//! On recent Intel (Alder Lake+), the `MonitorWait` / `MonitorWaitFallback`
+//! On recent Intel (Alder Lake+), the `MonitorWaitFallback`
 //! strategies use `UMONITOR`/`UMWAIT`/`TPAUSE` for near-zero-power wakeup,
 //! gated at runtime on the `WAITPKG` CPUID feature.
 
@@ -40,7 +40,7 @@
 /// | `YieldSpin` | Low (~30 ns on x86) | High | Shared cores, SMT |
 /// | `BackoffSpin` | Medium (exponential) | Decreasing | Background consumers |
 /// | `Adaptive` | Auto-scaling | Varies | General purpose |
-/// | `MonitorWait` | Near-zero (~30 ns on Intel) | Near-zero | Intel Alder Lake+ |
+/// | `MonitorWaitFallback` | Near-zero (~30 ns on Intel) | Near-zero | Intel Alder Lake+ |
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitStrategy {
     /// Pure busy-spin with no PAUSE instruction. Minimum wakeup latency
@@ -71,46 +71,17 @@ pub enum WaitStrategy {
     /// On x86_64 with WAITPKG support: `UMONITOR` sets up a monitored
     /// address range, `UMWAIT` puts the core into an optimized C0.1/C0.2
     /// state until a write to the monitored cache line wakes it. Near-zero
-    /// power consumption with ~30 ns wakeup latency.
+    /// power consumption with ~30 ns wakeup latency, without needing an
+    /// address to monitor.
     ///
     /// Falls back to `YieldSpin` on x86 CPUs without WAITPKG support.
     /// On aarch64: uses SEVL+WFE (identical to `YieldSpin`).
-    ///
-    /// `addr` must point to the stamp field of the slot being waited on.
-    /// Use [`WaitStrategy::monitor_wait`] to construct safely from an
-    /// `AtomicU64` reference. For callers that cannot provide an address,
-    /// use [`MonitorWaitFallback`](WaitStrategy::MonitorWaitFallback).
-    ///
-    /// # Safety (of direct construction)
-    ///
-    /// The pointer must remain valid for the duration of the wait.
-    /// Constructing this variant directly with a pointer to stack memory
-    /// or memory that may be deallocated is undefined behavior. Always
-    /// prefer the safe constructor [`WaitStrategy::monitor_wait()`].
-    MonitorWait {
-        /// Pointer to the memory location to monitor. Must remain valid
-        /// for the duration of the wait.
-        addr: *const u8,
-    },
-
-    /// Like `MonitorWait` but without an explicit address.
-    ///
-    /// On x86_64 with WAITPKG: falls back to `TPAUSE` (timed wait in
-    /// C0.1 state) for low-power waiting without address monitoring.
-    /// On aarch64: SEVL+WFE. On other x86: PAUSE.
+    /// On x86_64 with WAITPKG: `TPAUSE` (timed wait in C0.1 state) for
+    /// low-power waiting. On aarch64: SEVL+WFE. On other x86: PAUSE.
     MonitorWaitFallback,
 }
 
-impl WaitStrategy {
-    /// Safely construct a [`MonitorWait`](WaitStrategy::MonitorWait) from
-    /// an `AtomicU64` reference (typically a slot's stamp field).
-    #[inline]
-    pub fn monitor_wait(stamp: &core::sync::atomic::AtomicU64) -> Self {
-        WaitStrategy::MonitorWait {
-            addr: stamp as *const core::sync::atomic::AtomicU64 as *const u8,
-        }
-    }
-}
+impl WaitStrategy {}
 
 impl Default for WaitStrategy {
     fn default() -> Self {
@@ -193,36 +164,6 @@ mod umwait {
         (deadline as u32, (deadline >> 32) as u32) // (eax, edx)
     }
 
-    /// Set up monitoring on the cache line containing `addr`.
-    /// The CPU will track writes to this line until UMWAIT is called.
-    #[inline(always)]
-    pub(super) unsafe fn umonitor(addr: *const u8) {
-        // UMONITOR rax: F3 0F AE /6 (with rax)
-        core::arch::asm!(
-            ".byte 0xf3, 0x0f, 0xae, 0xf0", // UMONITOR rax
-            in("rax") addr,
-            options(nostack, preserves_flags),
-        );
-    }
-
-    /// Wait for a write to the monitored address or timeout.
-    /// `ctrl` = 0 for C0.2 (deeper sleep), 1 for C0.1 (lighter sleep).
-    /// Returns quickly (~30 ns) when the monitored cache line is written.
-    /// Deadline is set ~100µs in the future as a safety bound.
-    #[inline(always)]
-    pub(super) unsafe fn umwait(ctrl: u32) {
-        let (lo, hi) = deadline_100us();
-        // UMWAIT ecx: F2 0F AE /6 (with ecx for control)
-        // edx:eax = absolute TSC deadline
-        core::arch::asm!(
-            ".byte 0xf2, 0x0f, 0xae, 0xf1", // UMWAIT ecx
-            in("ecx") ctrl,
-            in("edx") hi,
-            in("eax") lo,
-            options(nostack, preserves_flags),
-        );
-    }
-
     /// Timed pause without address monitoring. Enters C0.1 state
     /// until the deadline (~100µs from now).
     /// `ctrl` = 0 for C0.2, 1 for C0.1.
@@ -239,14 +180,6 @@ mod umwait {
         );
     }
 }
-
-// SAFETY: MonitorWait stores a raw pointer for the monitored address.
-// The pointer is only used during wait() and must remain valid for
-// the duration of the wait. Since WaitStrategy is passed by value to
-// recv_with() and wait() is called synchronously, this is safe as long
-// as the caller ensures the pointed-to memory outlives the wait.
-unsafe impl Send for WaitStrategy {}
-unsafe impl Sync for WaitStrategy {}
 
 impl WaitStrategy {
     /// Execute one wait iteration. Called by `recv_with` on each loop when
@@ -303,37 +236,6 @@ impl WaitStrategy {
                     for _ in 0..8 {
                         core::hint::spin_loop();
                     }
-                }
-            }
-            WaitStrategy::MonitorWait { addr } => {
-                // On x86_64 with WAITPKG: UMONITOR + UMWAIT for near-zero
-                // power wakeup on cache-line write (~30 ns wakeup latency).
-                // Falls back to PAUSE on CPUs without WAITPKG.
-                #[cfg(target_arch = "x86_64")]
-                {
-                    if waitpkg_supported() {
-                        unsafe {
-                            umwait::umonitor(*addr);
-                            umwait::umwait(1); // C0.1 — lighter sleep, faster wakeup
-                        }
-                    } else {
-                        core::hint::spin_loop();
-                    }
-                }
-                // On aarch64: SEVL + WFE (same as YieldSpin — WFE already
-                // monitors cache-line invalidation events).
-                #[cfg(target_arch = "aarch64")]
-                {
-                    let _ = addr;
-                    unsafe {
-                        core::arch::asm!("sevl", options(nomem, nostack));
-                        core::arch::asm!("wfe", options(nomem, nostack));
-                    }
-                }
-                #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-                {
-                    let _ = addr;
-                    core::hint::spin_loop();
                 }
             }
             WaitStrategy::MonitorWaitFallback => {

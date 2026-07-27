@@ -13,8 +13,9 @@
 //!
 //! - **Seqlock per slot** — stamp and payload share a cache line; readers never
 //!   take a lock, writers never allocate.
-//! - **`T: Pod`** — restricts payloads to plain-old-data types where every bit
-//!   pattern is valid, making torn seqlock reads harmless (no UB).
+//! - **`T: Pod`** — restricts payloads to plain-old-data types that carry no
+//!   padding and where every bit pattern is valid, so a torn seqlock read
+//!   yields a value that is discarded rather than an invalid one.
 //! - **Per-consumer cursor** — zero contention between subscribers.
 //! - **Single-producer** — no write-side synchronisation; the seqlock invariant
 //!   is upheld by `&mut self` on [`Publisher::publish`].

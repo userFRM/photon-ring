@@ -54,7 +54,7 @@ stamp, so subscribers never share a barrier and therefore never contend.
 
 **Two payload models.** `channel()` and friends take `T: Pod` — fixed-shape
 plain data, validated optimistically, no copying beyond the message itself.
-[`event_channel()`](#choosing-a-ring) takes any `Send` type, including `String`,
+[`event_channel()`](#choosing-a-ring) takes any `Send + Sync` type, including `String`,
 `Vec`, enums and `Option`: slots own their values and are mutated in place, so
 steady-state publishing allocates nothing.
 
@@ -310,7 +310,7 @@ Photon Ring is for streams where every subscriber should observe every message w
 
 ## API overview
 
-Channels are the lowest-level interface. `channel::<T>(capacity)` creates the fastest single-producer path and returns a `Publisher<T>` plus a cloneable `Subscribable<T>`. `channel_bounded::<T>(capacity, watermark)` adds optional backpressure; `Publisher::try_publish` returns `PublishError::Full(value)` instead of overwriting unread slots. `channel_mpmc::<T>(capacity)` returns `MpPublisher<T>`, which is `Clone + Send + Sync` and uses atomic sequence claiming for concurrent producers. On the write side, the important APIs are `publish`, `publish_with` for in-place construction, `publish_batch` on `Publisher`, and `published`/`capacity` for lightweight counters.
+Channels are the lowest-level interface. `channel::<T>(capacity)` creates the fastest single-producer path and returns a `Publisher<T>` plus a cloneable `Subscribable<T>`. `channel_bounded::<T>(capacity, watermark)` adds optional backpressure; `Publisher::try_publish` returns `PublishError::Full(value)` instead of overwriting unread slots. `channel_mpmc::<T>(capacity)` returns `MpPublisher<T>`, which is `Clone + Send + Sync` and uses atomic sequence claiming for concurrent producers. On the write side, the important APIs are `publish`, `publish_with` to build the value in the caller's closure, `publish_batch` on `Publisher`, and `published`/`capacity` for lightweight counters.
 
 Subscribers are independent and contention-free by default. `Subscribable::subscribe()` starts from future messages only, while `subscribe_from_oldest()` starts at the oldest message still retained in the ring. `Subscriber<T>` exposes `try_recv`, `recv`, `recv_with`, `latest`, `pending`, `recv_batch`, and `drain`, plus observability counters through `total_received`, `total_lagged`, and `receive_ratio`.
 
@@ -322,7 +322,7 @@ The `#[derive(photon_ring::DeriveMessage)]` macro supports a `#[photon(as_enum)]
 
 Ring capacity accepts any integer >= 2. Power-of-two capacities use bitwise `seq & mask` for zero-overhead indexing; arbitrary capacities use Lemire reciprocal-multiply fastmod (~1.5 ns).
 
-Wait behavior is explicit. `recv_with` accepts `WaitStrategy::BusySpin`, `YieldSpin`, `BackoffSpin`, `Adaptive`, `MonitorWait`, or `MonitorWaitFallback` depending on whether you want the absolute lowest wakeup latency or better core sharing. `MonitorWait` uses Intel UMONITOR/UMWAIT (Alder Lake+) for near-zero power wakeup (~30 ns), with automatic fallback to PAUSE on older x86 or WFE on ARM; construct it safely via `WaitStrategy::monitor_wait(&stamp)`. `MonitorWaitFallback` uses TPAUSE without requiring an address. On supported platforms, the crate also includes `affinity` helpers for CPU pinning; with the `hugepages` feature on Linux, you can use `Publisher::mlock`, `Publisher::prefault`, and `mem::{set_numa_preferred, reset_numa_policy}` to reduce page-fault and NUMA noise.
+Wait behavior is explicit. `recv_with` accepts `WaitStrategy::BusySpin`, `YieldSpin`, `BackoffSpin`, `Adaptive`, or `MonitorWaitFallback` depending on whether you want the absolute lowest wakeup latency or better core sharing. `MonitorWaitFallback` uses Intel TPAUSE (Alder Lake+) for near-zero power wakeup (~30 ns), with automatic fallback to PAUSE on older x86 or WFE on ARM. On supported platforms, the crate also includes `affinity` helpers for CPU pinning; with the `hugepages` feature on Linux, you can use `Publisher::mlock`, `Publisher::prefault`, and `mem::{set_numa_preferred, reset_numa_policy}` to reduce page-fault and NUMA noise.
 
 ### Companion crates
 

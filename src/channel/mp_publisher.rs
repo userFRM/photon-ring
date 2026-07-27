@@ -83,7 +83,7 @@ impl<T: Pod> MpPublisher<T> {
         self.advance_cursor(seq);
     }
 
-    /// Publish by writing directly into the slot via a closure.
+    /// Publish a value built by a closure.
     ///
     /// Like [`publish`](Self::publish), but takes a closure that builds the
     /// value, which can let the compiler construct it directly into the
