@@ -22,8 +22,24 @@
 //!   instead of `write_volatile`. Zero cost on x86-64. See the `atomic-slots` feature flag.
 //! - **Arbitrary capacity** — any ring size >= 2 via Lemire fastmod; power-of-two
 //!   uses bitwise AND (zero regression).
-//! - **Companion crates** — [`photon-ring-async`] for runtime-agnostic async wrappers,
-//!   [`photon-ring-metrics`] for framework-agnostic observability.
+//! - **Companion crates** — `photon-ring-async` for runtime-agnostic async wrappers,
+//!   `photon-ring-metrics` for framework-agnostic observability.
+//!
+//! ## Which ring
+//!
+//! - [`channel()`] — lossy `Pod` broadcast; the publisher never blocks, and a
+//!   subscriber that falls behind observes `Lagged { skipped }`.
+//! - [`channel_bounded()`] — per-consumer contracts on one ring:
+//!   [`subscribe()`](Subscribable::subscribe) gates the publisher and loses
+//!   nothing, [`subscribe_lossy()`](Subscribable::subscribe_lossy) can never
+//!   stall it.
+//! - [`channel_mpmc()`] — many producing threads; delivery is lossy only.
+//! - [`event_channel()`] — payloads that own heap data (`String`, `Vec`,
+//!   enums); slots are mutated in place and every subscriber gates the
+//!   publisher.
+//! - [`Photon`] / [`TypedBus`] — string-keyed topics, each an independent
+//!   lossy ring.
+//! - [`topology`] — dedicated-thread pipelines and terminal consumers.
 //!
 //! ## Quick start
 //!
