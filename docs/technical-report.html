@@ -213,7 +213,7 @@ pub struct Slot&lt;T&gt; {
 
     <h3>3.2 Write protocol</h3>
     <div class="code-block">
-<pre>1. stamp.store(seq * 2 + 1, Release)   // odd = write in progress
+<pre>1. stamp.store(seq * 2 + 1, Relaxed)   // odd = write in progress
 2. fence(Release)                       // stamp visible before data
 3. ptr::write(slot.value, data)         // write payload (T: Pod)
 4. stamp.store(seq * 2 + 2, Release)   // even = write complete
@@ -227,9 +227,10 @@ pub struct Slot&lt;T&gt; {
 3. if s1 &lt; expected*2+2: return Empty
 4. if s1 &gt; expected*2+2: return Lagged (ring wrapped)
 5. value = ptr::read(slot.value)       // optimistic copy
-6. s2 = stamp.load(Acquire)
-7. if s1 == s2:           return Ok(value)
-8. else:                  retry from step 1</pre>
+6. fence(Acquire)                       // payload read completes before re-check
+7. s2 = stamp.load(Relaxed)
+8. if s1 == s2:           return Ok(value)
+9. else:                  retry from step 1</pre>
     </div>
 
     <h3>3.4 Why one cache-line transfer suffices</h3>
@@ -323,8 +324,8 @@ pub struct Slot&lt;T&gt; {
     <p>All measurements on Intel i7-10700KF (Comet Lake), Linux 6.8, Rust 1.93.1, <code>--release</code>:</p>
 
     <ul style="margin-left:24px;margin-bottom:16px;">
-      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">Publish only:</strong> 2.8&nbsp;ns (vs 30.6&nbsp;ns for disruptor-rs) &mdash; 10.9x faster</li>
-      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">Cross-thread roundtrip:</strong> 95&nbsp;ns (vs 138&nbsp;ns) &mdash; 1.45x faster</li>
+      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">Publish only:</strong> 2.8&nbsp;ns</li>
+      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">Cross-thread roundtrip:</strong> 95&nbsp;ns</li>
       <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">One-way latency p50 (RDTSC):</strong> 48&nbsp;ns &mdash; within 20% of the bare L3 snoop floor</li>
       <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">One-way latency p99 (RDTSC):</strong> 66&nbsp;ns</li>
       <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">Sustained throughput:</strong> ~300M msg/s</li>
@@ -347,7 +348,10 @@ pub struct Slot&lt;T&gt; {
       achieves near-hardware latency for broadcast inter-thread messaging in Rust.
     </p>
     <p>
-      The design is sound under the Rust memory model, <code>no_std</code> compatible with
+      With the <code>atomic-slots</code> feature the design is free of data races under the
+      Rust memory model, machine-checked by Miri in CI; the default volatile path carries the
+      same formal data race as every classical seqlock and behaves correctly on real hardware.
+      The crate is <code>no_std</code> compatible with
       <code>alloc</code>, and scales from embedded targets to server-class NUMA systems.
       The <code>SubscriberGroup</code> fanout mechanism and the <code>Pipeline</code> topology
       builder extend the primitive to multi-stage, multi-consumer architectures without
