@@ -58,6 +58,10 @@ name = "pipeline"
 name = "diamond"
 
 [[bench]]
+name = "fanout_threaded"
+harness = false
+
+[[bench]]
 name = "fanout_scaling"
 harness = false
 

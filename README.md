@@ -215,6 +215,33 @@ broadcast*, not as a race those libraries lost — they solve the different and
 equally real problem of exactly one receiver owning each message. Reproduce with
 `cargo bench --bench fanout_scaling`.
 
+### Cross-thread fanout
+
+The table above isolates protocol cost in cache. This one is the deployed shape:
+one producer, N consumer threads on their own cores, 100k messages, every
+consumer accounting for all of them. Total milliseconds, lower is better:
+
+| | semantics | N=1 | N=2 | N=4 | N=8 |
+|---|---|---|---|---|---|
+| **Photon Ring** | lossless | 0.49 | **0.52** | **0.58** | **2.62** |
+| Sequence-barrier ring | lossless | **0.45** | 2.94 | 6.99 | 12.15 |
+| Point-to-point queue, one per consumer | lossless | 1.39 | 14.90 | 27.92 | 46.79 |
+| Shared-ring broadcast | lossy | 8.23 | 8.61 | 33.86 | 119.47 |
+
+**At a single consumer the barrier ring is faster** — there is no contention for
+a barrier to lose to, and its handler drains a batch where this crate takes
+messages one at a time. From two consumers onward the positions reverse, and
+photon stays close to flat through N=4 while the barrier design climbs.
+
+Two honest caveats. The jump in photon's own N=8 figure is not established as
+architectural: that run puts nine threads on a sixteen-thread machine that was
+not otherwise idle, and it needs a pinned rerun on a quiet box before anyone
+leans on it. And the lossy row is not comparable to the three lossless ones — it
+drops under pressure instead of applying backpressure, so compare it against this
+crate's lossy `channel()` rather than against `channel_bounded()`.
+
+Reproduce with `cargo bench --bench fanout_threaded`.
+
 ### Core operations
 
 ```
