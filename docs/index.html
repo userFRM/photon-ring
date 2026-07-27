@@ -958,8 +958,48 @@ Write protocol:                Read protocol:
      ========================================================= -->
 <section id="comparison">
   <div class="container">
-    <h2 class="section-title">Comparison</h2>
-    <p class="section-sub">How Photon Ring fits alongside the broader Rust concurrency ecosystem</p>
+    <h2 class="section-title">Where this fits</h2>
+    <p class="section-sub">What inter-thread messaging designs cost, and which problem each one solves</p>
+
+    <!-- Approach landscape -->
+    <h3 class="mb-8" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Approaches</h3>
+    <p class="note-inline mb-16">
+      Inter-thread messaging designs usually pay for at least one expensive property
+      on the hot path. Which one you can afford is the real choice.
+    </p>
+    <div class="table-wrapper mb-32">
+      <table>
+        <thead>
+          <tr><th>Approach</th><th>Write cost</th><th>Read cost</th><th>Allocation</th><th>Solves</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td-label">Locked queue</td><td>Lock acquisition</td><td>Lock acquisition</td>
+            <td>Dynamic growth</td><td>General handoff, any payload</td>
+          </tr>
+          <tr>
+            <td class="td-label">Lock-free queue</td><td>CAS on head</td><td>CAS on tail</td>
+            <td>None</td><td>Point-to-point: one receiver owns each message</td>
+          </tr>
+          <tr>
+            <td class="td-label">Shared sequence barrier</td><td>Sequence claim + barrier</td>
+            <td>Barrier spin</td><td>None</td><td>Ordered pipelines with dependent stages</td>
+          </tr>
+          <tr>
+            <td class="td-label">Stamped slots <em>(this crate)</em></td><td>Stamp + payload write</td>
+            <td>Stamp check, private cursor</td><td>None</td>
+            <td>Broadcast: every subscriber sees every message, uncoordinated</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note-inline mb-32">
+      Pre-allocated rings are what removed allocator overhead from this problem, and
+      the shared sequence barrier is the classic way to order consumers on one. Moving
+      validation into each slot trades that ordering for independence: subscribers keep
+      private cursors and never contend, which is what makes per-consumer delivery
+      contracts and hot attach possible.
+    </p>
 
     <!-- Capabilities -->
     <h3 class="mb-16" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Capabilities</h3>
