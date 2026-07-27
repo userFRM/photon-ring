@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`event_channel` — a ring for payloads that are not `Pod`.** `String`, `Vec`,
+  enums, `Option` and `bool` are ordinary payloads here. Slots own their values,
+  built once by a factory and mutated in place rather than overwritten, so
+  nothing is copied into or out of the ring and steady-state publishing of
+  heap-owning payloads allocates nothing — a `String` field reuses the capacity
+  it had the previous time round the ring.
+
+  The `Pod` bound exists so that a reader racing a writer sees a harmless torn
+  value instead of undefined behaviour. That race is only possible when the
+  publisher may overwrite a slot a subscriber has not read, which cannot happen
+  on a bounded ring where every subscriber is registered for backpressure. With
+  that established, the ring needs no seqlock either: the cursor's
+  `Release`/`Acquire` pair is the whole publication edge, so there are no stamps,
+  no torn-read retry and no fence on this path.
+
+  The cost model differs from the `Pod` ring in a way worth knowing: an event
+  ring costs what the publisher and subscriber actually touch, while the `Pod`
+  ring costs `size_of::<T>()` on every publish and every receive regardless.
+  Updating a few fields of a 4 KiB payload measures 7.9 ns against 207.7 ns for
+  the copying ring; at 8 B, where there is no copy worth avoiding, the `Pod` ring
+  is slightly ahead (3.8 ns against 4.1 ns). Rewriting an entire large payload
+  every message collects no copy advantage.
+
+  The trade is that every subscriber gates the publisher — there are no lossy
+  observers on an event ring, because a reader that can be lapped is exactly the
+  reader this design excludes. `channel()` remains for broadcast with lossy taps.
 - **`topology::Consumer`** — a managed terminal consumer. Spawns a thread that
   runs a handler over every message with `(message, sequence, end_of_batch)`,
   handling shutdown, batch signalling and panic capture. `Pipeline` covers stages
