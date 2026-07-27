@@ -1,7 +1,7 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use photon_ring_async::{AsyncSubscriber, AsyncSubscriberGroup};
+use photon_ring_async::AsyncSubscriber;
 
 #[test]
 fn test_async_recv_single() {
@@ -21,23 +21,6 @@ fn test_async_recv_single() {
 }
 
 #[test]
-fn test_async_recv_group() {
-    pollster::block_on(async {
-        let (mut pub_, subs) = photon_ring::channel::<u64>(64);
-        let mut group = AsyncSubscriberGroup::<u64, 4>::new(subs.subscribe_group::<4>());
-
-        for i in 0..10 {
-            pub_.publish(100 + i);
-        }
-
-        for i in 0..10 {
-            let value = group.recv().await;
-            assert_eq!(value, 100 + i);
-        }
-    });
-}
-
-#[test]
 fn test_async_recv_batch() {
     pollster::block_on(async {
         let (mut pub_, subs) = photon_ring::channel::<u64>(64);
@@ -51,25 +34,6 @@ fn test_async_recv_batch() {
         let count = async_sub.recv_batch(&mut buf).await;
         assert_eq!(count, 10);
         for i in 0..10 {
-            assert_eq!(buf[i], i as u64);
-        }
-    });
-}
-
-#[test]
-fn test_async_batch_group() {
-    pollster::block_on(async {
-        let (mut pub_, subs) = photon_ring::channel::<u64>(64);
-        let mut group = AsyncSubscriberGroup::<u64, 2>::new(subs.subscribe_group::<2>());
-
-        for i in 0..5 {
-            pub_.publish(i);
-        }
-
-        let mut buf = [0u64; 8];
-        let count = group.recv_batch(&mut buf).await;
-        assert_eq!(count, 5);
-        for i in 0..5 {
             assert_eq!(buf[i], i as u64);
         }
     });
@@ -151,14 +115,11 @@ fn test_recv_batch_empty_buffer() {
     pollster::block_on(async {
         let (mut pub_, subs) = photon_ring::channel::<u64>(64);
         let mut async_sub = AsyncSubscriber::new(subs.subscribe());
-        let mut group = AsyncSubscriberGroup::<u64, 2>::new(subs.subscribe_group::<2>());
         pub_.publish(7);
 
         assert_eq!(async_sub.recv_batch(&mut []).await, 0);
-        assert_eq!(group.recv_batch(&mut []).await, 0);
 
-        // The message is still queued for both.
+        // The message is still queued.
         assert_eq!(async_sub.recv().await, 7);
-        assert_eq!(group.recv().await, 7);
     });
 }

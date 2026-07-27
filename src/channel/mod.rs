@@ -3,7 +3,6 @@
 
 mod constructors;
 mod errors;
-mod group;
 mod mp_publisher;
 mod publisher;
 mod subscribable;
@@ -11,7 +10,6 @@ mod subscriber;
 
 pub use constructors::{channel, channel_bounded, channel_mpmc};
 pub use errors::{PublishError, TryRecvError};
-pub use group::SubscriberGroup;
 pub use mp_publisher::MpPublisher;
 pub use publisher::Publisher;
 pub use subscribable::Subscribable;

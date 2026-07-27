@@ -31,15 +31,6 @@ let mut sub = photon_ring_async::AsyncSubscriber::with_spin_budget(subs.subscrib
 let mut sub = photon_ring_async::AsyncSubscriber::with_spin_budget(subs.subscribe(), 1024);
 ```
 
-### Subscriber groups
-
-```rust
-let mut group = photon_ring_async::AsyncSubscriberGroup::<u64, 4>::new(
-    subs.subscribe_group::<4>(),
-);
-let value = group.recv().await;
-```
-
 ### Batch receive
 
 ```rust

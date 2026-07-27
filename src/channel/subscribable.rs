@@ -1,7 +1,6 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use super::group::SubscriberGroup;
 use super::subscriber::Subscriber;
 use crate::pod::Pod;
 use crate::ring::{Padded, SharedRing};
@@ -42,21 +41,6 @@ impl<T: Pod> Subscribable<T> {
             total_lagged: 0,
             total_received: 0,
         }
-    }
-
-    /// Create a [`SubscriberGroup`] of `N` subscribers starting from the next
-    /// message. All `N` logical subscribers share a single ring read — the
-    /// seqlock is checked once and all cursors are advanced together.
-    ///
-    /// This is dramatically faster than `N` independent [`Subscriber`]s when
-    /// polled in a loop on the same thread.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `N` is 0.
-    pub fn subscribe_group<const N: usize>(&self) -> SubscriberGroup<T, N> {
-        assert!(N > 0, "SubscriberGroup requires at least 1 subscriber");
-        SubscriberGroup(self.subscribe())
     }
 
     /// Create a subscriber that never gates the publisher.

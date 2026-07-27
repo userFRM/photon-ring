@@ -35,10 +35,8 @@
 //! # }
 //! ```
 
-mod group;
 mod subscriber;
 
-pub use group::{AsyncSubscriberGroup, GroupRecvFuture};
 pub use subscriber::{AsyncSubscriber, RecvFuture};
 
 /// Default number of synchronous `try_recv()` attempts before yielding to

@@ -30,7 +30,7 @@
 //! strategies use `UMONITOR`/`UMWAIT`/`TPAUSE` for near-zero-power wakeup,
 //! gated at runtime on the `WAITPKG` CPUID feature.
 
-/// Strategy for blocking `recv()` and `SubscriberGroup::recv()`.
+/// Strategy for blocking `recv()`.
 ///
 /// All variants are `no_std` compatible — no OS thread primitives required.
 ///

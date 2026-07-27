@@ -70,6 +70,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Publisher::sequence()`** — returned exactly what `published()` returns. Use
   `published()`, whose docs now carry the lag-computation note. **Breaking**;
   this makes the next release semver-major.
+- **`SubscriberGroup`, `subscribe_group`, and `AsyncSubscriberGroup`.** All `N`
+  logical subscribers shared one cursor, so the type had become a newtype over
+  `Subscriber` whose const `N` did nothing but echo back from `aligned_count()`
+  — an API surface implying a capability that no longer existed. Replace
+  `subscribe_group::<N>()` with `subscribe()`: it is the same object with the
+  same cost, since a group already performed exactly one ring read regardless of
+  `N`. **Breaking.**
 
 ### Changed
 - **Dual-licensed under `MIT OR Apache-2.0`** (was Apache-2.0 only). `LICENSE-MIT`
@@ -80,10 +87,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Err(payload)` where `payload` downcasts to a `Vec<usize>` of panicked stage
   indices; the original panic payload is not recoverable by design.
   `Pipeline::join` documented accordingly — it never re-panics.
-- **`SubscriberGroup`** is now a thin wrapper over `Subscriber` (all `N` logical
-  subscribers already shared one cursor). Public methods are unchanged;
-  `recv()` now uses `Subscriber`'s two-phase spin — 64 bare iterations before the
-  power-efficient wait — instead of a single-phase loop.
 - Crate packages exclude `docs/`, `verification/`, and `scripts/`.
 
 ### Fixed

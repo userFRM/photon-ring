@@ -92,8 +92,8 @@
       that plagues traditional sequence-barrier designs. We describe the stamp-in-slot protocol, its safety
       properties under the Rust memory model, and show that per-slot seqlocks combined with per-consumer
       cursors yield constant-time, zero-allocation publish and receive operations. Benchmarks on an Intel
-      i7-10700KF demonstrate 48&nbsp;ns p50 one-way latency and 0.2&nbsp;ns per-subscriber fanout cost with
-      batched subscriber groups &mdash; a 5.5x improvement over independent consumers.
+      i7-10700KF demonstrate 48&nbsp;ns p50 one-way latency and a marginal fanout cost of approximately
+      1.1&nbsp;ns per additional same-thread subscriber.
     </div>
   </div>
 </div>
@@ -284,16 +284,7 @@ pub struct Slot&lt;T&gt; {
 
     <h2 id="advanced">Advanced Features</h2>
 
-    <h3>5.1 SubscriberGroup: batched fanout</h3>
-    <p>
-      When N logical consumers are polled on the same thread, <code>SubscriberGroup&lt;T, N&gt;</code>
-      performs one ring slot read and advances N cursors in a compiler-unrolled loop.
-      Independent fanout to N subscribers costs approximately N &times; 1.1&nbsp;ns;
-      a group reduces this to a single seqlock read plus ~0.2&nbsp;ns per logical consumer
-      &mdash; a 5.5x improvement at N=10.
-    </p>
-
-    <h3>5.2 MPMC path</h3>
+    <h3>5.1 MPMC path</h3>
     <p>
       <code>MpPublisher&lt;T&gt;</code> is <code>Clone + Send + Sync</code> and uses atomic
       sequence claiming (<code>fetch_add</code> on the head cursor) for concurrent producers.
@@ -301,7 +292,7 @@ pub struct Slot&lt;T&gt; {
       on the write side.
     </p>
 
-    <h3>5.3 Pipeline topology builder</h3>
+    <h3>5.2 Pipeline topology builder</h3>
     <p>
       <code>topology::Pipeline</code> builds dedicated-thread processing graphs. Each stage runs
       on its own thread with a ring buffer connecting it to the next stage. Fan-out (diamond)
@@ -309,7 +300,7 @@ pub struct Slot&lt;T&gt; {
       with OS thread support.
     </p>
 
-    <h3>5.4 Hugepages and NUMA affinity</h3>
+    <h3>5.3 Hugepages and NUMA affinity</h3>
     <p>
       With the <code>hugepages</code> feature on Linux, <code>Publisher::mlock</code> prevents
       paging and <code>Publisher::prefault</code> fault-maps all ring pages at startup, eliminating
@@ -329,7 +320,6 @@ pub struct Slot&lt;T&gt; {
       <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">One-way latency p99 (RDTSC):</strong> 66&nbsp;ns</li>
       <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">Sustained throughput:</strong> ~300M msg/s</li>
       <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">Fanout to 10 subscribers:</strong> 17.0&nbsp;ns total, 1.7&nbsp;ns per subscriber</li>
-      <li style="margin-bottom:6px;"><strong style="color:var(--text-bright);">SubscriberGroup (10 logical):</strong> ~4&nbsp;ns total, 0.2&nbsp;ns per logical consumer</li>
     </ul>
 
     <p>
@@ -349,9 +339,9 @@ pub struct Slot&lt;T&gt; {
     <p>
       The design is sound under the Rust memory model, <code>no_std</code> compatible with
       <code>alloc</code>, and scales from embedded targets to server-class NUMA systems.
-      The <code>SubscriberGroup</code> fanout mechanism and the <code>Pipeline</code> topology
-      builder extend the primitive to multi-stage, multi-consumer architectures without
-      sacrificing the fundamental one-cache-line-per-receive invariant.
+      The <code>Pipeline</code> topology builder extends the primitive to multi-stage,
+      multi-consumer architectures without sacrificing the fundamental
+      one-cache-line-per-receive invariant.
     </p>
 
   </div>
