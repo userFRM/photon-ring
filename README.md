@@ -10,16 +10,61 @@
 [![no_std](https://img.shields.io/badge/no__std-compatible-brightgreen.svg)](https://docs.rs/photon-ring)
 [![CI](https://github.com/userFRM/photon-ring/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/userFRM/photon-ring/actions/workflows/ci.yml)
 
-**Ultra-low-latency SPMC/MPMC pub/sub using stamped ring buffers.**
+**Broadcast messaging for Rust, where every subscriber sees every message and no
+subscriber can slow another one down.**
 
-Photon Ring is a zero-allocation pub/sub crate for Rust built around pre-allocated ring buffers, per-slot stamp validation, and `T: Pod` payloads. It targets the part of concurrent systems where queueing overhead dominates: market data, telemetry fanout, staged pipelines, and other hot-path broadcast workloads where every subscriber should see every message.
+## Who this is for
 
-By default, slots use a volatile-based seqlock for maximum performance. With the `atomic-slots` feature, the same stamp protocol operates over `AtomicU64` stripes — **free of data races under the Rust abstract machine** for padding-free payloads, with zero performance regression on x86-64, and verified under Miri in CI.
+You have one producer (or a few) and several consumers that must each see the
+whole stream — market data fanned out to a pricing engine, a risk check and a
+recorder; telemetry to several sinks; a staged pipeline. The messages are small
+and fixed-shape, they arrive faster than a lock-based channel can move them, and
+you care about the nanoseconds.
 
-It is `no_std` compatible with `alloc`, supports named-topic buses and typed buses, and includes a pipeline builder for multi-stage thread topologies on supported desktop/server platforms.
+If instead each message should be handled by exactly one of N workers, you want a
+work queue, not this. If your consumers are async tasks that idle most of the
+time, use your runtime's own channel.
+
+## What you get that you would otherwise build yourself
+
+**Consumers with different delivery contracts, on the same ring.** Backpressure
+exists so a consumer that must not lose messages can stop the producer. But a
+consumer that is only *observing* should never be able to do that:
+
+```rust
+let (mut tx, subs) = channel_bounded::<Order>(1024, 0);
+
+let mut risk      = subs.subscribe();        // gates the publisher, loses nothing
+let mut telemetry = subs.subscribe_lossy();  // never gates it, drops when behind
+```
+
+`risk` keeps its no-loss guarantee. `telemetry` is invisible to the publisher's
+backpressure scan, so however slow it gets it cannot stall order flow — and when
+it falls behind it reports `Lagged { skipped }` with an exact count rather than
+silently missing data. Both read the same sequence numbers, so an observation can
+be tied to the message the risk engine processed.
+
+**A consumer that dies releases the ring** instead of wedging it: its subscriber
+drops as the thread unwinds, and the publisher continues. **Consumers can attach
+to a ring that is already running,** so a debug tap goes on and comes off a live
+system without perturbing it.
+
+Both properties fall out of the design — each slot carries its own validation
+stamp, so subscribers never share a barrier and therefore never contend.
+
+**Two payload models.** `channel()` and friends take `T: Pod` — fixed-shape
+plain data, validated optimistically, no copying beyond the message itself.
+[`event_channel()`](#choosing-a-ring) takes any `Send` type, including `String`,
+`Vec`, enums and `Option`: slots own their values and are mutated in place, so
+steady-state publishing allocates nothing.
+
+It is `no_std` compatible with `alloc`, and the concurrency protocols are gated
+in CI by Miri, loom and a TLA+ model.
 
 > [!IMPORTANT]
-> The default `channel()` is lossy on overflow: the publisher never blocks, and slow subscribers detect drops via `TryRecvError::Lagged`. If lossless delivery matters more than raw latency, use `channel_bounded()`.
+> The default `channel()` is lossy on overflow: the publisher never blocks, and
+> slow subscribers detect drops via `TryRecvError::Lagged`. If lossless delivery
+> matters more than raw latency, use `channel_bounded()`.
 
 ## Quick start
 
@@ -163,46 +208,27 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
 - **Sustained throughput:** about 300M msg/s on Intel and 88M msg/s on M1 Pro
 - **Payload scaling:** at cache-line-sized payloads the copy is a few percent of latency — cross-core cache-coherence transfer dominates. The copy only becomes co-dominant in the KiB range; see [`docs/payload-scaling.md`](docs/payload-scaling.md)
 
-## Degradation, not deadlock
+## Delivery contracts in detail
 
-Backpressure exists so a consumer that must not lose messages can stop the
-publisher. But two things should never stop the world: a consumer that is only
-*observing*, and a consumer that has *died*.
+The guarantees sketched above have edges worth knowing before you rely on them.
 
-Because each slot carries its own stamp, subscribers need no shared barrier —
-so a single ring can carry **different delivery contracts per consumer**:
+A dying consumer releases the ring **provided its `Subscriber` drops with it** —
+automatic when the consumer thread owns the subscriber. One parked in long-lived
+shared state (an `Arc`'d registry, a supervisor struct) outlives its consumer and
+keeps gating the publisher, so don't do that with a tracked subscriber. A merely
+*wedged* consumer still applies backpressure; that is the guarantee working.
 
-```rust
-let (mut pub_, subs) = channel_bounded::<Order>(1024, 0);
+The no-loss guarantee belongs to each tracked subscriber's lifetime, not to the
+ring. If the last tracked subscriber goes away while lossy ones remain, nothing
+gates the publisher any more and the bounded ring behaves like a lossy one.
 
-let mut risk = subs.subscribe();              // gates the publisher, loses nothing
-let mut telemetry = subs.subscribe_lossy();   // never gates it, drops when behind
-```
+`subscribe_from_oldest()` is the exception on a bounded ring: it starts at a
+sequence the publisher was already entitled to overwrite, so its history may be
+lapped, and it registers a full ring behind — which gates the publisher until it
+drains. Use `subscribe()` unless you specifically want the retained history.
 
-`risk` keeps its no-loss guarantee. `telemetry` is invisible to the publisher's
-backpressure scan, so however slow it gets it cannot stall order flow; when it
-falls behind it observes `Lagged { skipped }` with an exact count, and
-`receive_ratio()` reports what it sampled. Both read the same sequence numbers,
-so an observation can be correlated with the message the risk engine processed.
-
-A consumer that *dies* also releases the ring, **provided its `Subscriber` drops
-with it** — which is automatic when the consumer thread owns the subscriber, as
-the thread unwinds and `Drop` removes it from the backpressure set. A subscriber
-parked in long-lived shared state (an `Arc`'d registry, a supervisor struct)
-outlives its consumer and keeps gating the publisher, so don't do that with a
-tracked subscriber. A merely *wedged* consumer still applies backpressure — that
-is the guarantee working as intended.
-
-The no-loss guarantee is a property of each tracked subscriber's lifetime, not
-of the ring: if the last tracked subscriber goes away while lossy ones remain,
-nothing gates the publisher any more and the bounded ring behaves like a lossy
-one.
-
-Subscribers can also attach to a ring that is already running, so a lossy
-debug tap can be added and removed on a live system without perturbing it.
-
-`cargo run --release --example degradation` demonstrates both scenarios;
-`tests/degradation.rs` asserts them.
+`cargo run --release --example degradation` demonstrates the slow-observer and
+dead-consumer scenarios; `tests/degradation.rs` asserts them.
 
 ## At a glance
 
