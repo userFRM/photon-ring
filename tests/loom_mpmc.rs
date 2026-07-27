@@ -35,13 +35,15 @@
 //! # Protocol summary (from mp_publisher.rs)
 //!
 //! 1. Producer claims seq via `fetch_add(1, AcqRel)` on `next_seq`.
-//! 2. Producer writes slot: stamp = `seq*2+1` (writing), then stamp = `seq*2+2` (done).
-//! 3. Fast-path CAS: `cursor: expected -> seq` (expected = u64::MAX for seq=0, else seq-1).
-//! 4. If fast CAS succeeds: run `catch_up_cursor(seq)`.
-//! 5. If fast CAS fails: wait on predecessor slot stamp >= `(seq-1)*2+2`.
-//! 6. Retry CAS after predecessor confirmed done.
-//! 7. If cursor == seq after retry: run `catch_up_cursor(seq)`.
-//! 8. `catch_up_cursor`: loop advancing cursor past already-committed successors.
+//! 2. Producer waits for the previous lap's write to its slot:
+//!    stamp >= `(seq - capacity)*2 + 2` (no-op for seq < capacity).
+//! 3. Producer writes slot: stamp = `seq*2+1` (writing), then stamp = `seq*2+2` (done).
+//! 4. Fast-path CAS: `cursor: expected -> seq` (expected = u64::MAX for seq=0, else seq-1).
+//! 5. If fast CAS succeeds: run `catch_up_cursor(seq)`.
+//! 6. If fast CAS fails: wait on predecessor slot stamp >= `(seq-1)*2+2`.
+//! 7. Retry CAS after predecessor confirmed done.
+//! 8. If cursor == seq after retry: run `catch_up_cursor(seq)`.
+//! 9. `catch_up_cursor`: loop advancing cursor past already-committed successors.
 
 // Only compile when the `loom` cfg is set.
 #![cfg(loom)]
@@ -396,7 +398,80 @@ fn catch_up_with_delayed_writer() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: Consumer single-check during publishing (3 threads, minimal)
+// Test 7: Writer-writer exclusion across a ring lap
+// ---------------------------------------------------------------------------
+
+/// Model of the claim-and-write path with the slot-lap gate from
+/// `MpPublisher::publish`: after claiming `seq`, a producer must wait for the
+/// previous lap's write to the same slot (`stamp >= (seq - capacity) * 2 + 2`)
+/// before writing.
+///
+/// Without the gate, three producers on a capacity-2 ring can hold sequences
+/// 0 and 2 concurrently — the same slot — and their payload writes interleave
+/// into a mixture that carries a valid stamp. The payload is modelled as a
+/// `loom::cell::UnsafeCell`, so loom itself fails the model if two writers
+/// ever access a slot concurrently; removing the gate below makes this test
+/// fail with the offending interleaving.
+///
+/// Cursor advancement is omitted: the exclusion property depends only on
+/// `next_seq` and the stamps, neither of which `advance_cursor` writes.
+struct LapModel {
+    next_seq: AtomicU64,
+    stamps: [AtomicU64; LAP_CAPACITY as usize],
+    payloads: [loom::cell::UnsafeCell<u64>; LAP_CAPACITY as usize],
+}
+
+const LAP_CAPACITY: u64 = 2;
+
+impl LapModel {
+    fn new() -> Self {
+        LapModel {
+            next_seq: AtomicU64::new(0),
+            stamps: core::array::from_fn(|_| AtomicU64::new(0)),
+            payloads: core::array::from_fn(|_| loom::cell::UnsafeCell::new(0)),
+        }
+    }
+
+    fn publish(&self, value: u64) {
+        let seq = self.next_seq.fetch_add(1, Ordering::AcqRel);
+        let idx = (seq % LAP_CAPACITY) as usize;
+
+        // The gate under test: wait for the previous lap's writer to finish
+        // with this slot before touching it.
+        if seq >= LAP_CAPACITY {
+            let lap_done = (seq - LAP_CAPACITY) * 2 + 2;
+            while self.stamps[idx].load(Ordering::Acquire) < lap_done {
+                loom::thread::yield_now();
+            }
+        }
+
+        self.stamps[idx].store(seq * 2 + 1, Ordering::Relaxed);
+        fence(Ordering::Release);
+        self.payloads[idx].with_mut(|p| unsafe { *p = value });
+        self.stamps[idx].store(seq * 2 + 2, Ordering::Release);
+    }
+}
+
+#[test]
+fn writers_one_lap_apart_are_exclusive() {
+    loom::model(|| {
+        let ring = Arc::new(LapModel::new());
+
+        let handles: Vec<_> = (0..3)
+            .map(|i| {
+                let r = ring.clone();
+                thread::spawn(move || r.publish(i))
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: Consumer single-check during publishing (3 threads, minimal)
 // ---------------------------------------------------------------------------
 
 /// Two producers publish while a consumer does one cursor load and one
