@@ -797,18 +797,16 @@ Write protocol:                Read protocol:
     <!-- Core operations table -->
     <h3 class="mb-8" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Core operations</h3>
     <p class="note-inline mb-16">
-      Compared against <a href="https://crates.io/crates/disruptor" target="_blank" rel="noopener">disruptor v4.0.0</a>
-      (BusySpin wait, 4096-slot ring, same binary, same Criterion invocation).
+      BusySpin wait strategy, 4096-slot ring, Criterion, 100 samples.
+      Machine A is the Intel i7-10700KF, machine B the Apple M1 Pro.
     </p>
     <div class="table-wrapper mb-32">
       <table>
         <thead>
           <tr>
             <th>Operation</th>
-            <th>Photon Ring (A)</th>
-            <th>Photon Ring (B)</th>
-            <th>disruptor-rs (A)</th>
-            <th>disruptor-rs (B)</th>
+            <th>Machine A</th>
+            <th>Machine B</th>
           </tr>
         </thead>
         <tbody>
@@ -816,21 +814,16 @@ Write protocol:                Read protocol:
             <td class="td-label">Publish only</td>
             <td class="td-best">2.8 ns</td>
             <td class="td-best">2.4 ns</td>
-            <td class="td-num">30.6 ns</td>
-            <td class="td-num">15.3 ns</td>
           </tr>
           <tr>
             <td class="td-label">Cross-thread roundtrip</td>
             <td class="td-best">95 ns</td>
             <td class="td-best">130 ns</td>
-            <td class="td-num">138 ns</td>
-            <td class="td-num">186 ns</td>
           </tr>
           <tr>
             <td class="td-label">Same-thread roundtrip (1 sub)</td>
             <td class="td-best">2.7 ns</td>
             <td class="td-best">8.8 ns</td>
-            <td class="td-num">&mdash;</td>
             <td class="td-num">&mdash;</td>
           </tr>
           <tr>
@@ -838,13 +831,11 @@ Write protocol:                Read protocol:
             <td class="td-best">17.0 ns</td>
             <td class="td-best">27.7 ns</td>
             <td class="td-num">&mdash;</td>
-            <td class="td-num">&mdash;</td>
           </tr>
           <tr>
             <td class="td-label">SubscriberGroup read</td>
             <td class="td-best">2.6 ns</td>
             <td class="td-best">8.8 ns</td>
-            <td class="td-num">&mdash;</td>
             <td class="td-num">&mdash;</td>
           </tr>
           <tr>
@@ -852,13 +843,11 @@ Write protocol:                Read protocol:
             <td class="td-num">12.1 ns</td>
             <td class="td-num">10.6 ns</td>
             <td class="td-num">&mdash;</td>
-            <td class="td-num">&mdash;</td>
           </tr>
           <tr>
             <td class="td-label">Empty poll</td>
             <td class="td-best">0.85 ns</td>
             <td class="td-num">1.1 ns</td>
-            <td class="td-num">&mdash;</td>
             <td class="td-num">&mdash;</td>
           </tr>
           <tr>
@@ -866,13 +855,11 @@ Write protocol:                Read protocol:
             <td class="td-num">158 ns</td>
             <td class="td-num">282 ns</td>
             <td class="td-num">&mdash;</td>
-            <td class="td-num">&mdash;</td>
           </tr>
           <tr>
             <td class="td-label">Struct roundtrip (24-byte Pod)</td>
             <td class="td-num">4.8 ns</td>
             <td class="td-num">9.3 ns</td>
-            <td class="td-num">&mdash;</td>
             <td class="td-num">&mdash;</td>
           </tr>
           <tr>
@@ -887,22 +874,11 @@ Write protocol:                Read protocol:
             <td class="td-best">~300M msg/s</td>
             <td class="td-best">~88M msg/s</td>
             <td class="td-num">&mdash;</td>
-            <td class="td-num">&mdash;</td>
           </tr>
         </tbody>
       </table>
     </div>
-
-    <div class="callout">
-      <strong>disruptor-rs comparison note:</strong>
-      Both libraries use BusySpin wait strategy and 4096-slot rings. The Disruptor
-      benchmarks run in the same Criterion binary, compiled with identical flags.
-      Disruptor's builder always runs the consumer on its own thread, so its roundtrip
-      is inherently cross-thread; there is no same-thread Disruptor row to compare against.
-      See <a href="benchmark-methodology.html">benchmark methodology</a> for full details.
-    </div>
-
-    <!-- Charts -->
+<!-- Charts -->
     <div class="chart-row" style="margin-top:40px;">
       <div class="chart-card">
         <div class="chart-title">Cross-thread roundtrip latency distribution</div>
@@ -974,7 +950,7 @@ Write protocol:                Read protocol:
     <img
       class="payload-img"
       src="images/payload-scaling.png"
-      alt="Payload scaling chart: Photon Ring vs disruptor-rs across 8B-4KiB payloads"
+      alt="Payload scaling chart: Photon Ring same-thread and cross-thread latency across 8B-4KiB payloads"
     >
 
     <div class="callout callout-warn" style="margin-top:0;">
@@ -993,118 +969,25 @@ Write protocol:                Read protocol:
     <h2 class="section-title">Comparison</h2>
     <p class="section-sub">How Photon Ring fits alongside the broader Rust concurrency ecosystem</p>
 
-    <!-- Feature matrix -->
-    <h3 class="mb-16" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Feature matrix</h3>
+    <!-- Capabilities -->
+    <h3 class="mb-16" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Capabilities</h3>
     <div class="table-wrapper mb-32">
       <table>
         <thead>
-          <tr>
-            <th>Feature</th>
-            <th>Photon Ring</th>
-            <th>disruptor-rs v4</th>
-            <th>crossbeam-channel</th>
-            <th>bus</th>
-          </tr>
+          <tr><th>Capability</th><th>Photon Ring</th></tr>
         </thead>
         <tbody>
-          <tr>
-            <td class="td-label">Delivery model</td>
-            <td>Broadcast</td>
-            <td>Broadcast</td>
-            <td>Point-to-point queue</td>
-            <td>Broadcast</td>
-          </tr>
-          <tr>
-            <td class="td-label">Publish cost</td>
-            <td class="td-best">2.8 ns / 12.1 ns (MPMC)</td>
-            <td class="td-num">30.6 ns</td>
-            <td class="td-num">&mdash;</td>
-            <td class="td-num">&mdash;</td>
-          </tr>
-          <tr>
-            <td class="td-label">Cross-thread roundtrip</td>
-            <td class="td-best">95 ns</td>
-            <td class="td-num">138 ns</td>
-            <td class="td-num">&mdash;</td>
-            <td class="td-num">&mdash;</td>
-          </tr>
-          <tr>
-            <td class="td-label">Sustained throughput</td>
-            <td class="td-best">~300M msg/s</td>
-            <td class="td-num">&mdash;</td>
-            <td class="td-num">&mdash;</td>
-            <td class="td-num">&mdash;</td>
-          </tr>
-          <tr>
-            <td class="td-label">Topology / pipeline builder</td>
-            <td><span class="badge-yes">Yes</span></td>
-            <td><span class="badge-yes">Yes</span></td>
-            <td><span class="badge-no">No</span></td>
-            <td><span class="badge-no">No</span></td>
-          </tr>
-          <tr>
-            <td class="td-label">Batch publish &amp; drain</td>
-            <td><span class="badge-yes">Yes</span></td>
-            <td><span class="badge-yes">Yes</span></td>
-            <td><span class="badge-opt">Iterator only</span></td>
-            <td><span class="badge-no">No</span></td>
-          </tr>
-          <tr>
-            <td class="td-label">Named-topic bus</td>
-            <td><span class="badge-yes">Yes</span></td>
-            <td><span class="badge-no">No</span></td>
-            <td><span class="badge-no">No</span></td>
-            <td><span class="badge-no">No</span></td>
-          </tr>
-          <tr>
-            <td class="td-label">Heterogeneous-type bus</td>
-            <td><span class="badge-yes">Yes (TypedBus)</span></td>
-            <td><span class="badge-no">No</span></td>
-            <td><span class="badge-no">No</span></td>
-            <td><span class="badge-no">No</span></td>
-          </tr>
-          <tr>
-            <td class="td-label">Backpressure</td>
-            <td><span class="badge-opt">Optional</span></td>
-            <td><span class="badge-yes">Default</span></td>
-            <td><span class="badge-yes">Default</span></td>
-            <td><span class="badge-yes">Default</span></td>
-          </tr>
-          <tr>
-            <td class="td-label">no_std compatible</td>
-            <td><span class="badge-yes">Yes</span></td>
-            <td><span class="badge-no">No</span></td>
-            <td><span class="badge-no">No</span></td>
-            <td><span class="badge-no">No</span></td>
-          </tr>
-          <tr>
-            <td class="td-label">Multi-producer (MPMC)</td>
-            <td><span class="badge-yes">Yes</span></td>
-            <td><span class="badge-yes">Yes</span></td>
-            <td><span class="badge-yes">Yes</span></td>
-            <td><span class="badge-no">No</span></td>
-          </tr>
-          <tr>
-            <td class="td-label">CPU affinity helpers</td>
-            <td><span class="badge-yes">Yes</span></td>
-            <td><span class="badge-no">No</span></td>
-            <td><span class="badge-no">No</span></td>
-            <td><span class="badge-no">No</span></td>
-          </tr>
-          <tr>
-            <td class="td-label">Hugepages / mlock</td>
-            <td><span class="badge-opt">Linux only</span></td>
-            <td><span class="badge-no">No</span></td>
-            <td><span class="badge-no">No</span></td>
-            <td><span class="badge-no">No</span></td>
-          </tr>
-          <tr>
-            <td class="td-label">Lazy drop on overflow</td>
-            <td><span class="badge-yes">Yes (lossy default)</span></td>
-            <td><span class="badge-no">Blocks</span></td>
-            <td><span class="badge-no">Blocks or drops</span></td>
-            <td><span class="badge-no">Blocks</span></td>
-          </tr>
+          <tr><td class="td-label">Delivery</td><td>Broadcast &mdash; every subscriber sees every message</td></tr>
+          <tr><td class="td-label">Payloads</td><td><code>Pod</code> on the seqlock ring; any <code>Send</code> type on an event ring</td></tr>
+          <tr><td class="td-label">Per-consumer contracts</td><td>Gating and non-gating subscribers on one ring</td></tr>
+          <tr><td class="td-label">Consumer failure</td><td>A dead consumer releases the publisher</td></tr>
+          <tr><td class="td-label">Hot attach</td><td>Subscribe to and detach from a running ring</td></tr>
+          <tr><td class="td-label">Backpressure</td><td>Optional, per subscriber</td></tr>
+          <tr><td class="td-label">Topologies</td><td>Pipelines, fan-out, managed terminal consumers</td></tr>
+          <tr><td class="td-label">Topic bus</td><td>Named topics, and a typed bus for per-topic payload types</td></tr>
+          <tr><td class="td-label">Multi-producer</td><td>Yes</td></tr>
+          <tr><td class="td-label"><code>no_std</code></td><td>Yes, with <code>alloc</code></td></tr>
+          <tr><td class="td-label">Verification</td><td>Miri, loom and a TLA+ model, gated in CI</td></tr>
         </tbody>
       </table>
     </div>
@@ -1469,7 +1352,6 @@ consumer.<span class="fn_">join</span>().<span class="fn_">unwrap</span>();</pre
 
   const PHOTON_BLUE   = 'rgba(88,  166, 255, 0.85)';
   const PHOTON_BLUE_B = 'rgba(88,  166, 255, 0.40)';
-  const DISRUPT_AMBER = 'rgba(227, 179,  65, 0.80)';
   const DISRUPT_AMB_B = 'rgba(227, 179,  65, 0.35)';
 
   /* ---- 1. Latency histogram ---- */
@@ -1477,11 +1359,9 @@ consumer.<span class="fn_">join</span>().<span class="fn_">unwrap</span>();</pre
     const bucketLabels = ['<32', '32-64', '64-128', '128-256', '256-512',
                           '512-1K', '1-2K', '2-4K', '4-8K', '8K+'];
 
-    /* Photon Ring: 90%+ of samples cluster in 32-64 ns range (p50=48, p90=61) */
-    /* Real data: 100,000,000 samples per library on Intel i7-10700KF */
-    const photonData    = [414, 99743738, 194601, 6953, 1060, 739, 33440, 9633, 3527, 139];
-    const disruptorData = [19, 395135, 99494583, 25924, 2253, 1106, 53900, 13605, 5307, 287];
-    const crossbeamData = [0, 8340, 66789385, 32511955, 585843, 1842, 63819, 19673, 7053, 329];
+    /* 100,000,000 samples on the Intel i7-10700KF. Over 99% of samples land in
+       the 32-64 ns bucket; p50 = 48 ns, p90 = 61 ns. */
+    const photonData = [414, 99743738, 194601, 6953, 1060, 739, 33440, 9633, 3527, 139];
 
     new Chart(document.getElementById('latencyHistogram'), {
       type: 'bar',
@@ -1493,22 +1373,6 @@ consumer.<span class="fn_">join</span>().<span class="fn_">unwrap</span>();</pre
             data: photonData,
             backgroundColor: PHOTON_BLUE,
             borderColor: 'rgba(88,166,255,0.9)',
-            borderWidth: 1,
-            borderRadius: 2,
-          },
-          {
-            label: 'disruptor-rs (measured)',
-            data: disruptorData,
-            backgroundColor: DISRUPT_AMBER,
-            borderColor: 'rgba(227,179,65,0.9)',
-            borderWidth: 1,
-            borderRadius: 2,
-          },
-          {
-            label: 'crossbeam-channel (measured)',
-            data: crossbeamData,
-            backgroundColor: 'rgba(249,117,131,0.65)',
-            borderColor: 'rgba(249,117,131,0.9)',
             borderWidth: 1,
             borderRadius: 2,
           },
@@ -1557,14 +1421,6 @@ consumer.<span class="fn_">join</span>().<span class="fn_">unwrap</span>();</pre
             borderWidth: 1,
             borderRadius: 3,
           },
-          {
-            label: 'disruptor-rs',
-            data: [30.6, 15.3],
-            backgroundColor: DISRUPT_AMBER,
-            borderColor: 'rgba(227,179,65,0.9)',
-            borderWidth: 1,
-            borderRadius: 3,
-          },
         ],
       },
       options: {
@@ -1602,14 +1458,6 @@ consumer.<span class="fn_">join</span>().<span class="fn_">unwrap</span>();</pre
             data: [95, 130],
             backgroundColor: PHOTON_BLUE,
             borderColor: 'rgba(88,166,255,0.9)',
-            borderWidth: 1,
-            borderRadius: 3,
-          },
-          {
-            label: 'disruptor-rs',
-            data: [138, 186],
-            backgroundColor: DISRUPT_AMBER,
-            borderColor: 'rgba(227,179,65,0.9)',
             borderWidth: 1,
             borderRadius: 3,
           },
