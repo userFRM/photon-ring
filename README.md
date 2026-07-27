@@ -187,6 +187,34 @@ Measured with Criterion on an **Intel i7-10700KF** (8C/16T, 3.80 GHz, Linux 6.8,
 > [!NOTE]
 > These numbers use `Pod` payloads and compare concrete implementations, not abstract algorithms. Scheduler noise, pinning, CPU generation, and payload layout all matter, so treat them as reproducible snapshots rather than universal constants.
 
+### Fanout scaling
+
+Delivering one message to N consumers is O(N) work somewhere. The question is
+where it lands, and whether the producer pays it.
+
+Time to publish one message and have all N consumers observe it, in nanoseconds.
+Single-threaded and in-cache, so this measures protocol overhead rather than
+real cross-core fanout latency:
+
+| N consumers | 1 | 2 | 4 | 8 | 16 | 32 | marginal |
+|---|---|---|---|---|---|---|---|
+| **Photon Ring** | **3.9** | **5.9** | **8.5** | **14.9** | **25.9** | **50.2** | **1.5 ns/consumer** |
+| Shared-ring broadcast | 47.7 | 65.5 | 99.2 | 167.3 | 306.9 | 579.6 | 17.2 ns/consumer |
+| Point-to-point queue, one per consumer | 22.3 | 44.3 | 87.8 | 176.5 | 351.3 | 701.9 | 21.9 ns/consumer |
+| Point-to-point queue, one per consumer (alt) | 27.4 | 53.9 | 108.7 | 217.6 | 428.4 | 859.3 | 26.8 ns/consumer |
+
+The marginal figure is what matters. A subscriber here costs about one cursor
+read and one stamp check, because subscribers share no state — so the producer's
+work does not grow with the audience. The other shapes pay per-consumer
+coordination: a shared-ring broadcast clones through common state, and a
+point-to-point queue is not broadcast at all, so fanning out means the producer
+sends once per consumer.
+
+Read that last row as *what broadcast costs on a queue that does not do
+broadcast*, not as a race those libraries lost — they solve the different and
+equally real problem of exactly one receiver owning each message. Reproduce with
+`cargo bench --bench fanout_scaling`.
+
 ### Core operations
 
 ```

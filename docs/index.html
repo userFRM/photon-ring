@@ -1001,6 +1001,52 @@ Write protocol:                Read protocol:
       contracts and hot attach possible.
     </p>
 
+    <!-- Fanout scaling -->
+    <h3 class="mb-8" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Fanout scaling</h3>
+    <p class="note-inline mb-16">
+      Delivering one message to N consumers is O(N) work somewhere &mdash; the question is
+      where it lands. Time to publish one message and have all N consumers observe it,
+      in nanoseconds, single-threaded and in-cache. This measures protocol overhead,
+      not real cross-core fanout latency.
+    </p>
+    <div class="table-wrapper mb-16">
+      <table>
+        <thead>
+          <tr><th>N consumers</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th><th>32</th><th>Marginal</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td-label">Photon Ring</td>
+            <td class="td-best">3.9</td><td class="td-best">5.9</td><td class="td-best">8.5</td>
+            <td class="td-best">14.9</td><td class="td-best">25.9</td><td class="td-best">50.2</td>
+            <td class="td-best">1.5 ns</td>
+          </tr>
+          <tr>
+            <td class="td-label">Shared-ring broadcast</td>
+            <td>47.7</td><td>65.5</td><td>99.2</td><td>167.3</td><td>306.9</td><td>579.6</td><td>17.2 ns</td>
+          </tr>
+          <tr>
+            <td class="td-label">Point-to-point queue, one per consumer</td>
+            <td>22.3</td><td>44.3</td><td>87.8</td><td>176.5</td><td>351.3</td><td>701.9</td><td>21.9 ns</td>
+          </tr>
+          <tr>
+            <td class="td-label">Point-to-point queue, one per consumer (alt)</td>
+            <td>27.4</td><td>53.9</td><td>108.7</td><td>217.6</td><td>428.4</td><td>859.3</td><td>26.8 ns</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout mb-32">
+      <strong>Reading this honestly:</strong>
+      the marginal column is what matters &mdash; a subscriber here costs about one cursor
+      read and one stamp check, because subscribers share no state, so the producer's work
+      does not grow with the audience. A point-to-point queue is not broadcast at all: fanning
+      out means the producer sends once per consumer, so that row shows what broadcast costs
+      on a queue that does not do broadcast, rather than a race those libraries lost. They
+      solve the different and equally real problem of exactly one receiver owning each message.
+      Reproduce with <code>cargo bench --bench fanout_scaling</code>.
+    </div>
+
     <!-- Capabilities -->
     <h3 class="mb-16" style="color:var(--text-bright);font-size:1rem;font-weight:600;">Capabilities</h3>
     <div class="table-wrapper mb-32">
