@@ -3,7 +3,7 @@
 
 //! A ring for values that are not `Pod`.
 //!
-//! The [`Pod`](crate::Pod) bound on [`channel`](crate::channel) exists so that a
+//! The [`Pod`](crate::Pod) bound on [`channel`](crate::channel()) exists so that a
 //! reader racing a writer observes a harmless torn value rather than undefined
 //! behaviour. That race is only possible when the publisher is allowed to
 //! overwrite a slot a subscriber has not read — which on a bounded ring, with
@@ -23,7 +23,7 @@
 //!
 //! The trade is that **every** subscriber gates the publisher. There are no
 //! lossy observers here — a reader that could be lapped is exactly the reader
-//! this design excludes. Use [`channel`](crate::channel) when you want those.
+//! this design excludes. Use [`channel`](crate::channel()) when you want those.
 //!
 //! ```
 //! use photon_ring::event_channel;

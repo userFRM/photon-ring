@@ -94,7 +94,7 @@ impl<T: Pod> Publisher<T> {
     /// The closure receives a `&mut MaybeUninit<T>`, allowing construction
     /// of the value into a stack temporary which is then written to the slot.
     ///
-    /// On a bounded channel (created with [`channel_bounded()`]), this method
+    /// On a bounded channel (created with [`channel_bounded()`](super::constructors::channel_bounded)), this method
     /// spin-waits until there is room in the ring, ensuring no message loss
     /// (same backpressure semantics as [`publish()`](Self::publish)).
     /// On a regular (lossy) channel, this publishes immediately.
@@ -121,7 +121,7 @@ impl<T: Pod> Publisher<T> {
 
     /// Publish a single value. Zero-allocation, O(1).
     ///
-    /// On a bounded channel (created with [`channel_bounded()`]), this method
+    /// On a bounded channel (created with [`channel_bounded()`](super::constructors::channel_bounded)), this method
     /// spin-waits until there is room in the ring, ensuring no message loss.
     /// On a regular (lossy) channel, this publishes immediately without any
     /// backpressure check.
@@ -144,9 +144,10 @@ impl<T: Pod> Publisher<T> {
 
     /// Try to publish a single value with backpressure awareness.
     ///
-    /// - On a regular (lossy) channel created with [`channel()`], this always
+    /// - On a regular (lossy) channel created with
+    ///   [`channel()`](super::constructors::channel), this always
     ///   succeeds — it publishes the value and returns `Ok(())`.
-    /// - On a bounded channel created with [`channel_bounded()`], this checks
+    /// - On a bounded channel created with [`channel_bounded()`](super::constructors::channel_bounded), this checks
     ///   whether the slowest subscriber has fallen too far behind. If
     ///   `publisher_seq - slowest_cursor >= capacity - watermark`, it returns
     ///   `Err(PublishError::Full(value))` without writing.

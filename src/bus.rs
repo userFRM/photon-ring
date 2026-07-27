@@ -10,7 +10,7 @@ use spin::Mutex;
 
 /// Named-topic pub/sub bus.
 ///
-/// Wraps [`channel`](crate::channel) with string-keyed topic routing.
+/// Wraps [`channel`](crate::channel()) with string-keyed topic routing.
 /// Each topic is an independent SPMC ring.
 ///
 /// ```

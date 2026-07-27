@@ -1,7 +1,7 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-/// Error from [`Subscriber::try_recv`].
+/// Error from [`Subscriber::try_recv`](super::subscriber::Subscriber::try_recv).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TryRecvError {
     /// No new messages available.
@@ -10,7 +10,9 @@ pub enum TryRecvError {
     Lagged { skipped: u64 },
 }
 
-/// Error returned by [`Publisher::try_publish`] when the ring is full
+/// Error returned by
+/// [`Publisher::try_publish`](super::publisher::Publisher::try_publish)
+/// when the ring is full
 /// and backpressure is enabled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublishError<T> {
