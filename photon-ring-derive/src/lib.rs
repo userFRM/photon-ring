@@ -1,7 +1,7 @@
 // Copyright 2026 Photon Ring Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Derive macros for [`photon_ring::Pod`] and [`photon_ring::Message`].
+//! Derive macros for `photon_ring::Pod` and `photon_ring::Message`.
 //!
 //! ## `Pod` derive
 //!

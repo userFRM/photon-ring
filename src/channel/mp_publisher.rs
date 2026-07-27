@@ -11,14 +11,15 @@ use super::prefetch_write_next;
 
 /// The write side of a Photon MPMC channel.
 ///
-/// Unlike [`Publisher`], `MpPublisher` is `Clone + Send + Sync` — multiple
+/// Unlike [`Publisher`](super::publisher::Publisher), `MpPublisher` is
+/// `Clone + Send + Sync` — multiple
 /// threads can publish concurrently. Sequence numbers are claimed atomically
 /// via `fetch_add` on a shared counter, and the cursor is advanced with a
 /// single best-effort CAS (no spin loop). Consumers use stamp-based reading,
 /// so the cursor only needs to be eventually consistent for `subscribe()`,
 /// `latest()`, and `pending()`.
 ///
-/// Created via [`channel_mpmc()`].
+/// Created via [`channel_mpmc()`](super::constructors::channel_mpmc).
 pub struct MpPublisher<T: Pod> {
     pub(super) ring: Arc<SharedRing<T>>,
     /// Cached raw pointer to the slot array. Avoids Arc + Box deref on the

@@ -10,7 +10,8 @@ use super::SharedState;
 
 /// Builder for a fan-out (diamond) topology with two output branches.
 ///
-/// Created by [`StageBuilder::fan_out`]. Call [`.build()`](FanOutBuilder::build)
+/// Created by [`StageBuilder::fan_out`](super::builder::StageBuilder::fan_out).
+/// Call [`.build()`](FanOutBuilder::build)
 /// to finalize, or chain additional stages on each branch with
 /// [`.then_a()`](FanOutBuilder::then_a) and
 /// [`.then_b()`](FanOutBuilder::then_b).

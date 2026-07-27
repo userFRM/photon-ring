@@ -44,7 +44,8 @@ pub fn channel<T: Pod>(capacity: usize) -> (Publisher<T>, Subscribable<T>) {
 
 /// Create a backpressure-capable SPMC channel.
 ///
-/// The publisher will refuse to publish (returning [`PublishError::Full`])
+/// The publisher will refuse to publish (returning
+/// [`PublishError::Full`](super::errors::PublishError::Full))
 /// when it would overwrite a slot that the slowest subscriber hasn't
 /// read yet, minus `watermark` slots of headroom.
 ///

@@ -46,6 +46,21 @@ p.publish(100);
 assert_eq!(s.try_recv(), Ok(100));
 ```
 
+## Choosing a ring
+
+Every ring broadcasts: each subscriber sees each message, with a private cursor and no shared read barrier. What varies is the payload family and the delivery contract.
+
+| Constructor | Payload | Delivery contract |
+|---|---|---|
+| `channel` | `T: Pod` | Lossy. The publisher never blocks; a subscriber that falls behind observes `Lagged { skipped }`. The fastest path. |
+| `channel_bounded` | `T: Pod` | Per consumer. `subscribe()` gates the publisher and loses nothing; `subscribe_lossy()` taps the same ring and can never stall it. |
+| `channel_mpmc` | `T: Pod` | Lossy, many producing threads. There is no bounded MPMC ring — see design constraints. |
+| `event_channel` | Any `T: Send` (`String`, `Vec`, enums) | Every subscriber gates the publisher. Slots are factory-built once and mutated in place; steady state copies and allocates nothing. |
+| `Photon<T>` / `TypedBus` | `T: Pod` | String-keyed topics, each an independent lossy ring. `Photon` fixes one payload type for the whole bus; `TypedBus` allows one per topic. |
+| `topology::Pipeline` / `topology::Consumer` | `T: Pod` | Dedicated OS threads wired with lossy rings between stages; shutdown, drain, and panic capture handled. |
+
+Sequence numbers are shared by every subscriber on a ring, so consumers with different contracts — a gating risk engine, a lossy telemetry tap — can correlate observations of the same message.
+
 ## Installation
 
 ```toml
@@ -237,6 +252,7 @@ Wait behavior is explicit. `recv_with` accepts `WaitStrategy::BusySpin`, `YieldS
 | Capacity >= 2 | Any capacity works. Power-of-two uses `seq & mask`; arbitrary capacity uses Lemire fastmod (~1.5 ns, zero-division). |
 | Single producer by default | The fastest path relies on `&mut self` rather than write-side atomics. |
 | Lossy overflow by default | The publisher never blocks; subscribers detect drops through `Lagged`. |
+| MPMC is lossy-only | Backpressure gates the publisher on per-subscriber trackers, which the multi-producer claim path does not consult. For lossless delivery use `channel_bounded` (single producer). |
 | 64-bit atomics required | The core algorithm depends on `AtomicU64`. |
 | 64-bit sequence numbers | Stamp encoding `seq * 2 + 2` overflows at `u64::MAX / 2` (~9.2 × 10^18 messages). At 1 billion msg/s this would take ~292 years. |
 

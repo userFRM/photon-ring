@@ -15,8 +15,11 @@ use super::{STAGE_PANICKED, STAGE_RUNNING};
 /// Each stage reads from one Photon Ring channel, applies a transformation,
 /// and publishes to the next channel. Stages run on dedicated threads.
 ///
-/// Created via [`Pipeline::builder`] -> [`PipelineBuilder::input`] ->
-/// [`StageBuilder::then`] / [`StageBuilder::fan_out`] -> [`StageBuilder::build`].
+/// Created via [`Pipeline::builder`] ->
+/// [`PipelineBuilder::input`](super::builder::PipelineBuilder::input) ->
+/// [`StageBuilder::then`](super::builder::StageBuilder::then) /
+/// [`StageBuilder::fan_out`](super::builder::StageBuilder::fan_out) ->
+/// [`StageBuilder::build`](super::builder::StageBuilder::build).
 pub struct Pipeline {
     pub(super) handles: Vec<JoinHandle<()>>,
     pub(super) shutdown: Arc<AtomicBool>,

@@ -97,6 +97,13 @@ impl<T: Pod> Subscribable<T> {
     /// reserve it, so the retained history it starts from may be lapped before
     /// it is read. Use [`subscribe`](Self::subscribe) if you need the guarantee
     /// from the first message you see.
+    ///
+    /// The converse also holds: once the publisher observes this subscriber's
+    /// tracker, the retained history counts as unread, so on a bounded channel
+    /// the publisher can be gated until up to a full ring of messages is
+    /// drained. Attach a replay consumer this way only if it will drain
+    /// promptly; a tap that must never stall the publisher should use
+    /// [`subscribe_lossy`](Self::subscribe_lossy) instead.
     pub fn subscribe_from_oldest(&self) -> Subscriber<T> {
         let head = self.ring.cursor.0.load(Ordering::Acquire);
         let cap = self.ring.capacity();
@@ -124,7 +131,7 @@ impl<T: Pod> Subscribable<T> {
     /// Create a subscriber with an active cursor tracker.
     ///
     /// Use this when the subscriber will participate in a
-    /// [`DependencyBarrier`] as an upstream consumer.
+    /// [`DependencyBarrier`](crate::DependencyBarrier) as an upstream consumer.
     ///
     /// On **bounded** channels, this behaves identically to
     /// [`subscribe()`](Self::subscribe) — those subscribers already have
@@ -132,7 +139,7 @@ impl<T: Pod> Subscribable<T> {
     ///
     /// On **lossy** channels, [`subscribe()`](Self::subscribe) omits the
     /// tracker (zero overhead for the common case). This method creates a
-    /// standalone tracker so that a [`DependencyBarrier`] can read the
+    /// standalone tracker so that a [`DependencyBarrier`](crate::DependencyBarrier) can read the
     /// subscriber's cursor position. The tracker is **not** registered
     /// with the ring's backpressure system — it is purely for dependency
     /// graph coordination.
