@@ -199,9 +199,9 @@ real cross-core fanout latency:
 | N consumers | 1 | 2 | 4 | 8 | 16 | 32 | marginal |
 |---|---|---|---|---|---|---|---|
 | **Photon Ring** | **3.9** | **5.9** | **8.5** | **14.9** | **25.9** | **50.2** | **1.5 ns/consumer** |
-| Shared-ring broadcast | 47.7 | 65.5 | 99.2 | 167.3 | 306.9 | 579.6 | 17.2 ns/consumer |
-| Point-to-point queue, one per consumer | 22.3 | 44.3 | 87.8 | 176.5 | 351.3 | 701.9 | 21.9 ns/consumer |
-| Point-to-point queue, one per consumer (alt) | 27.4 | 53.9 | 108.7 | 217.6 | 428.4 | 859.3 | 26.8 ns/consumer |
+| `tokio::sync::broadcast` 1.53 | 47.7 | 65.5 | 99.2 | 167.3 | 306.9 | 579.6 | 17.2 ns/consumer |
+| `crossbeam-channel` 0.5, one per consumer | 22.3 | 44.3 | 87.8 | 176.5 | 351.3 | 701.9 | 21.9 ns/consumer |
+| `flume` 0.11, one per consumer | 27.4 | 53.9 | 108.7 | 217.6 | 428.4 | 859.3 | 26.8 ns/consumer |
 
 The marginal figure is what matters. A subscriber here costs about one cursor
 read and one stamp check, because subscribers share no state — so the producer's
@@ -224,14 +224,17 @@ consumer accounting for all of them. Total milliseconds, lower is better:
 | | semantics | N=1 | N=2 | N=4 | N=8 |
 |---|---|---|---|---|---|
 | **Photon Ring** | lossless | 0.49 | **0.52** | **0.58** | **2.62** |
-| Sequence-barrier ring | lossless | **0.45** | 2.94 | 6.99 | 12.15 |
-| Point-to-point queue, one per consumer | lossless | 1.39 | 14.90 | 27.92 | 46.79 |
-| Shared-ring broadcast | lossy | 8.23 | 8.61 | 33.86 | 119.47 |
+| `disruptor` 4.0 | lossless | **0.45** | 2.94 | 6.99 | 12.15 |
+| `crossbeam-channel` 0.5, one per consumer | lossless | 1.39 | 14.90 | 27.92 | 46.79 |
+| `tokio::sync::broadcast` 1.53 | lossy | 8.23 | 8.61 | 33.86 | 119.47 |
 
-**At a single consumer the barrier ring is faster** — there is no contention for
-a barrier to lose to, and its handler drains a batch where this crate takes
-messages one at a time. From two consumers onward the positions reverse, and
-photon stays close to flat through N=4 while the barrier design climbs.
+**At a single consumer `disruptor` is faster** — its consumers coordinate through
+a shared sequence barrier, and with one consumer there is nothing to coordinate,
+so the barrier costs nothing while this crate still pays for its per-slot stamps.
+From two consumers onward the positions reverse: the producer must fold every
+consumer's sequence into a minimum before it can publish, so that cost grows with
+the audience, while a stamped slot is read independently by each subscriber.
+Photon stays close to flat through N=4.
 
 Two honest caveats. The jump in photon's own N=8 figure is not established as
 architectural: that run puts nine threads on a sixteen-thread machine that was

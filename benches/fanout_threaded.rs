@@ -189,15 +189,19 @@ fn threaded(c: &mut Criterion) {
         g.bench_with_input(BenchmarkId::new("photon", n), &n, |b, &n| {
             b.iter(|| photon(n))
         });
-        g.bench_with_input(BenchmarkId::new("barrier-ring", n), &n, |b, &n| {
+        g.bench_with_input(BenchmarkId::new("disruptor-rs", n), &n, |b, &n| {
             b.iter(|| barrier_ring(n))
         });
-        g.bench_with_input(BenchmarkId::new("shared-ring-broadcast", n), &n, |b, &n| {
-            b.iter(|| shared_ring(n))
-        });
-        g.bench_with_input(BenchmarkId::new("per-consumer-queue", n), &n, |b, &n| {
-            b.iter(|| per_consumer_queue(n))
-        });
+        g.bench_with_input(
+            BenchmarkId::new("tokio::sync::broadcast", n),
+            &n,
+            |b, &n| b.iter(|| shared_ring(n)),
+        );
+        g.bench_with_input(
+            BenchmarkId::new("crossbeam-channel (one per consumer)", n),
+            &n,
+            |b, &n| b.iter(|| per_consumer_queue(n)),
+        );
     }
     g.finish();
 }
