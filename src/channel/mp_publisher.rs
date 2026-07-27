@@ -88,6 +88,13 @@ impl<T: Pod> MpPublisher<T> {
     /// `&mut MaybeUninit<T>` for in-place construction, potentially
     /// eliminating a write-side `memcpy`.
     ///
+    /// The closure must not panic: the sequence number is already claimed
+    /// when it runs, and a claim that never completes its write stalls every
+    /// later publisher waiting on it. (The single-producer
+    /// [`Publisher::publish_with`](super::publisher::Publisher::publish_with)
+    /// has no such hazard — its sequence only advances after a completed
+    /// write, and nothing else waits on it.)
+    ///
     /// # Example
     ///
     /// ```
