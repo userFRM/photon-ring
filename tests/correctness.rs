@@ -1236,6 +1236,57 @@ fn mpmc_stress() {
 }
 
 #[test]
+fn mpmc_stress_more_publishers_than_capacity() {
+    // With more publishes in flight than the ring has slots, two producers
+    // hold sequence numbers one lap apart — the same slot. The publisher must
+    // wait for the previous lap's write to that slot to finish before writing,
+    // or the two writes interleave and a reader can accept the mixture as a
+    // valid message (the stamp protocol only detects reader-vs-writer races,
+    // not writer-vs-writer).
+    //
+    // Payload lanes are all set to the same value, so any accepted message
+    // with unequal lanes is a torn write that was published as valid.
+    let (pub_, subs) = channel_mpmc::<[u64; 4]>(2);
+    let n_pubs = 4u64;
+    let n_per_pub = 50_000u64;
+    let total = n_pubs * n_per_pub;
+
+    let mut sub = subs.subscribe();
+    let reader = std::thread::spawn(move || {
+        let mut seen = 0u64;
+        while seen < total {
+            match sub.try_recv() {
+                Ok(v) => {
+                    assert!(
+                        v[1] == v[0] && v[2] == v[0] && v[3] == v[0],
+                        "torn write published as valid: {v:?}"
+                    );
+                    seen += 1;
+                }
+                Err(TryRecvError::Empty) => core::hint::spin_loop(),
+                Err(TryRecvError::Lagged { skipped }) => seen += skipped,
+            }
+        }
+    });
+
+    let mut writers = Vec::new();
+    for pid in 0..n_pubs {
+        let p = pub_.clone();
+        writers.push(std::thread::spawn(move || {
+            for i in 0..n_per_pub {
+                let x = pid * n_per_pub + i;
+                p.publish([x; 4]);
+            }
+        }));
+    }
+
+    for w in writers {
+        w.join().unwrap();
+    }
+    reader.join().unwrap();
+}
+
+#[test]
 fn mpmc_published_count() {
     let (pub_, _subs) = channel_mpmc::<u64>(64);
     assert_eq!(pub_.published(), 0);

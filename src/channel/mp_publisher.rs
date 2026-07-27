@@ -64,6 +64,11 @@ impl<T: Pod> MpPublisher<T> {
     /// single-point serialization bottleneck. Once the predecessor is
     /// confirmed done, a single CAS advances the cursor, followed by a
     /// catch-up loop to absorb any successors that are also done.
+    ///
+    /// When more publishes are in flight than the ring has slots — more than
+    /// `capacity` threads inside `publish` at once — a publisher waits for
+    /// the previous lap's write to its slot to complete before writing.
+    /// With fewer concurrent publishers than slots, that wait never triggers.
     #[inline]
     pub fn publish(&self, value: T) {
         // SAFETY: next_seq_ptr points to ring.next_seq (MPMC ring), kept alive by self.ring.
@@ -71,6 +76,7 @@ impl<T: Pod> MpPublisher<T> {
         let seq = next_seq_atomic.fetch_add(1, Ordering::AcqRel);
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
         let slot = unsafe { &*self.slots_ptr.add(self.index.slot(seq)) };
+        self.wait_for_slot(slot, seq);
         prefetch_write_next(self.slots_ptr, self.index.slot(seq + 1) as u64);
         slot.write(seq, value);
         self.advance_cursor(seq);
@@ -81,6 +87,13 @@ impl<T: Pod> MpPublisher<T> {
     /// Like [`publish`](Self::publish), but the closure receives a
     /// `&mut MaybeUninit<T>` for in-place construction, potentially
     /// eliminating a write-side `memcpy`.
+    ///
+    /// The closure must not panic: the sequence number is already claimed
+    /// when it runs, and a claim that never completes its write stalls every
+    /// later publisher waiting on it. (The single-producer
+    /// [`Publisher::publish_with`](super::publisher::Publisher::publish_with)
+    /// has no such hazard — its sequence only advances after a completed
+    /// write, and nothing else waits on it.)
     ///
     /// # Example
     ///
@@ -98,9 +111,52 @@ impl<T: Pod> MpPublisher<T> {
         let seq = next_seq_atomic.fetch_add(1, Ordering::AcqRel);
         // SAFETY: slots_ptr is valid for the lifetime of self.ring (Arc-owned).
         let slot = unsafe { &*self.slots_ptr.add(self.index.slot(seq)) };
+        self.wait_for_slot(slot, seq);
         prefetch_write_next(self.slots_ptr, self.index.slot(seq + 1) as u64);
         slot.write_with(seq, f);
         self.advance_cursor(seq);
+    }
+
+    /// Wait until the previous lap's write to `slot` has completed.
+    ///
+    /// Sequence claiming via `fetch_add` is unbounded, so when more publishes
+    /// are in flight than the ring has slots, two producers hold sequences
+    /// exactly `capacity` apart — the same slot. The seqlock stamp only
+    /// detects reader-versus-writer races, so two concurrent *writers* would
+    /// interleave into a mixture that ends up carrying a valid stamp, and a
+    /// reader would accept it. Gating on the previous lap's "done" stamp
+    /// makes same-slot writers mutually exclusive: claims for one slot are
+    /// `capacity` apart, and each waits for its predecessor's completed
+    /// write, which forms a well-founded chain (sequences below `capacity`
+    /// never wait). Modelled exhaustively in `tests/loom_mpmc.rs`
+    /// (`writers_one_lap_apart_are_exclusive`).
+    ///
+    /// With fewer in-flight publishes than slots — the normal case — the
+    /// first stamp load already satisfies the bound and this is one Acquire
+    /// load of a line the caller is about to write anyway.
+    #[inline]
+    fn wait_for_slot(&self, slot: &Slot<T>, seq: u64) {
+        let cap = self.index.capacity;
+        if seq < cap {
+            return;
+        }
+        let lap_done = (seq - cap) * 2 + 2;
+        // On aarch64: SEVL primes the event register so the first WFE does
+        // not block; subsequent WFEs sleep until a cache-line event (the
+        // predecessor's stamp store) wakes the core. Same idiom as
+        // `advance_cursor`.
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            core::arch::asm!("sevl", options(nomem, nostack));
+        }
+        while slot.stamp_load() < lap_done {
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                core::arch::asm!("wfe", options(nomem, nostack));
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            core::hint::spin_loop();
+        }
     }
 
     /// Number of messages claimed so far (across all clones).

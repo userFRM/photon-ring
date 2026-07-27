@@ -133,6 +133,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   soundness claim was documented but ungated. Iteration counts scale down under
   `cfg(miri)`, and one lossy-ring liveness assertion is scoped to non-Miri runs
   where the scheduler makes it meaningful.
+- **Two MPMC publishers could write the same slot concurrently.** Sequence
+  claiming via `fetch_add` is unbounded, so with more publishes in flight than
+  the ring has slots — more than `capacity` threads inside `publish` at once —
+  two producers hold sequences exactly one lap apart, which is the same slot.
+  The seqlock stamp only detects reader-versus-writer races, so the two writes
+  could interleave into a mixture that ends up carrying a valid stamp, and a
+  reader would accept it; on the default volatile path the concurrent writes are
+  also a data race, reachable from safe code as
+  `channel_mpmc::<u64>(2)` plus three publishing threads. A publisher now waits
+  for the previous lap's write to its slot to complete before writing (one
+  Acquire load of the stamp it is about to overwrite; the wait itself never
+  triggers with fewer concurrent publishers than slots). Modelled exhaustively
+  under loom in `tests/loom_mpmc.rs` (`writers_one_lap_apart_are_exclusive`,
+  which fails on the ungated protocol), and exercised by a stress test with
+  more publishers than slots.
 - **`AsyncSubscriber::recv_batch` / `AsyncSubscriberGroup::recv_batch` panicked on
   a zero-length buffer** ("index out of bounds: the len is 0 but the index is 0"),
   and consumed a message it could not store. They now return `0`.
