@@ -91,8 +91,9 @@ impl<T: Pod> Publisher<T> {
 
     /// Publish by writing directly into the slot via a closure.
     ///
-    /// The closure receives a `&mut MaybeUninit<T>`, allowing construction
-    /// of the value into a stack temporary which is then written to the slot.
+    /// The closure returns the value, so it cannot leave the payload partly
+    /// initialised; it is built as a stack temporary and then written to the
+    /// slot.
     ///
     /// On a bounded channel (created with [`channel_bounded()`](super::constructors::channel_bounded)), this method
     /// spin-waits until there is room in the ring, ensuring no message loss
@@ -105,11 +106,11 @@ impl<T: Pod> Publisher<T> {
     /// use std::mem::MaybeUninit;
     /// let (mut p, s) = photon_ring::channel::<u64>(64);
     /// let mut sub = s.subscribe();
-    /// p.publish_with(|slot| { slot.write(42u64); });
+    /// p.publish_with(|| 42u64);
     /// assert_eq!(sub.try_recv(), Ok(42));
     /// ```
     #[inline]
-    pub fn publish_with(&mut self, f: impl FnOnce(&mut core::mem::MaybeUninit<T>)) {
+    pub fn publish_with(&mut self, f: impl FnOnce() -> T) {
         self.wait_for_backpressure();
         // SAFETY: see publish_unchecked.
         let slot = unsafe { &*self.slots_ptr.add(self.index.slot(self.seq)) };

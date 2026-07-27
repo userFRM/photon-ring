@@ -69,9 +69,11 @@ struct EventRing<T> {
 // reach it (guaranteed by the backpressure invariant: the publisher will not
 // advance past `slowest + capacity`), and only ever by subscribers once the
 // cursor has been released past it. `T: Send` is required to move values across
-// the threads that touch them.
-unsafe impl<T: Send> Send for EventRing<T> {}
-unsafe impl<T: Send> Sync for EventRing<T> {}
+// the threads that touch them, and `T: Sync` because several subscribers can
+// hold `&T` into the same slot at once — without it a payload with interior
+// mutability would let safe code race through those shared references.
+unsafe impl<T: Send + Sync> Send for EventRing<T> {}
+unsafe impl<T: Send + Sync> Sync for EventRing<T> {}
 
 impl<T> EventRing<T> {
     /// The lowest sequence any live subscriber still needs, or `None` if there
@@ -101,7 +103,7 @@ pub struct EventPublisher<T> {
 }
 
 // SAFETY: see EventRing.
-unsafe impl<T: Send> Send for EventPublisher<T> {}
+unsafe impl<T: Send + Sync> Send for EventPublisher<T> {}
 
 impl<T> EventPublisher<T> {
     /// Whether sequence `self.seq` can be written without overtaking a
@@ -175,8 +177,8 @@ pub struct EventSubscribable<T> {
 }
 
 // SAFETY: see EventRing.
-unsafe impl<T: Send> Send for EventSubscribable<T> {}
-unsafe impl<T: Send> Sync for EventSubscribable<T> {}
+unsafe impl<T: Send + Sync> Send for EventSubscribable<T> {}
+unsafe impl<T: Send + Sync> Sync for EventSubscribable<T> {}
 
 impl<T> Clone for EventSubscribable<T> {
     fn clone(&self) -> Self {
@@ -217,7 +219,7 @@ pub struct EventSubscriber<T> {
 }
 
 // SAFETY: see EventRing.
-unsafe impl<T: Send> Send for EventSubscriber<T> {}
+unsafe impl<T: Send + Sync> Send for EventSubscriber<T> {}
 
 impl<T> EventSubscriber<T> {
     /// Run `f` on the next message, if one is available.
@@ -262,6 +264,10 @@ impl<T> EventSubscriber<T> {
 
 /// Create a ring of `capacity` values built by `factory`.
 ///
+/// `T` must be `Sync` as well as `Send`: several subscribers can hold a
+/// reference into the same slot at once, so a payload with interior mutability
+/// would let them race.
+///
 /// Values are created once, up front, and reused for the life of the ring, so
 /// steady-state publishing allocates nothing even for payloads that own heap
 /// data.
@@ -269,7 +275,7 @@ impl<T> EventSubscriber<T> {
 /// # Panics
 ///
 /// Panics if `capacity < 2`.
-pub fn event_channel<T: Send + 'static>(
+pub fn event_channel<T: Send + Sync + 'static>(
     capacity: usize,
     mut factory: impl FnMut() -> T,
 ) -> (EventPublisher<T>, EventSubscribable<T>) {

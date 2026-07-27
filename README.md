@@ -58,8 +58,9 @@ plain data, validated optimistically, no copying beyond the message itself.
 `Vec`, enums and `Option`: slots own their values and are mutated in place, so
 steady-state publishing allocates nothing.
 
-It is `no_std` compatible with `alloc`, and the concurrency protocols are gated
-in CI by Miri, loom and a TLA+ model.
+It is `no_std` compatible with `alloc`. The concurrency protocols are gated in
+CI by Miri and loom; a TLA+ model of the seqlock lives in `verification/` and is
+checked by hand rather than on every push.
 
 > [!IMPORTANT]
 > The default `channel()` is lossy on overflow: the publisher never blocks, and

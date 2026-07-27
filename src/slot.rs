@@ -157,22 +157,17 @@ impl<T: Pod> Slot<T> {
         self.stamp.store(done, Ordering::Release);
     }
 
-    /// Seqlock write via closure — construct a value on the stack, then
-    /// `write_volatile` it into the slot.
+    /// Seqlock write via closure — build the value, then `write_volatile` it
+    /// into the slot.
     ///
-    /// The closure receives a `&mut MaybeUninit<T>` pointing to a **stack
-    /// temporary**, not the slot itself. This avoids creating a `&mut`
-    /// reference that aliases concurrent readers (which would be UB under
-    /// the Rust abstract machine). After the closure returns, the fully
-    /// initialized value is written into the slot with `write_volatile`,
-    /// matching the soundness approach used by [`write()`](Self::write).
-    ///
-    /// For `T: Pod` types (typically register-sized), the extra stack copy
-    /// is negligible and often optimized away.
+    /// The closure returns the value rather than filling a `MaybeUninit`, so
+    /// there is no way for it to leave the payload partly initialised. It is
+    /// built as a stack temporary rather than in the slot, which avoids
+    /// creating a `&mut` that aliases concurrent readers; for `T: Pod`
+    /// (typically register-sized) that copy is usually optimised away.
     #[inline]
-    pub(crate) fn write_with(&self, seq: u64, f: impl FnOnce(&mut MaybeUninit<T>)) {
-        let mut tmp = MaybeUninit::<T>::uninit();
-        f(&mut tmp);
+    pub(crate) fn write_with(&self, seq: u64, f: impl FnOnce() -> T) {
+        let tmp = MaybeUninit::new(f());
 
         let writing = seq * 2 + 1;
         let done = seq * 2 + 2;
@@ -278,13 +273,8 @@ impl<T: Pod> Slot<T> {
 
     /// Seqlock write via closure using atomic stripes.
     #[inline]
-    pub(crate) fn write_with(&self, seq: u64, f: impl FnOnce(&mut MaybeUninit<T>)) {
-        let mut tmp = MaybeUninit::<T>::uninit();
-        f(&mut tmp);
-
-        // SAFETY: closure contract — tmp is initialized.
-        let value = unsafe { tmp.assume_init() };
-        self.write(seq, value);
+    pub(crate) fn write_with(&self, seq: u64, f: impl FnOnce() -> T) {
+        self.write(seq, f());
     }
 
     /// Seqlock read protocol using atomic stripes. Formally sound.

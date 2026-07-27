@@ -17,6 +17,9 @@ use std::thread;
 struct RawTick {
     price: f64,
     volume: u32,
+    /// Explicit tail padding: `Pod` forbids implicit gaps, which are
+    /// uninitialised memory and undefined to read as part of a value.
+    _pad: u32,
 }
 
 // SAFETY: RawTick is #[repr(C)] with all numeric fields;
@@ -28,8 +31,11 @@ unsafe impl photon_ring::Pod for RawTick {}
 #[allow(dead_code)]
 struct EnrichedTick {
     price: f64,
-    volume: u32,
     vwap: f64,
+    volume: u32,
+    /// Explicit tail padding: `Pod` forbids implicit gaps, which are
+    /// uninitialised memory and undefined to read as part of a value.
+    _pad: u32,
 }
 
 // SAFETY: EnrichedTick is #[repr(C)] with all numeric fields;
@@ -39,9 +45,12 @@ unsafe impl photon_ring::Pod for EnrichedTick {}
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 struct Signal {
+    strength: f64,
     /// 0 = sell, 1 = buy (bool is NOT Pod)
     buy: u8,
-    strength: f64,
+    /// Explicit tail padding: `Pod` forbids implicit gaps, which are
+    /// uninitialised memory and undefined to read as part of a value.
+    _pad: [u8; 7],
 }
 
 // SAFETY: Signal is #[repr(C)] with all numeric fields;
@@ -75,6 +84,7 @@ fn main() {
                         price: tick.price,
                         volume: tick.volume,
                         vwap,
+                        _pad: 0,
                     });
                 }
                 Err(TryRecvError::Empty) => core::hint::spin_loop(),
@@ -90,7 +100,11 @@ fn main() {
             Ok(tick) => {
                 let buy = if tick.price < tick.vwap { 1u8 } else { 0u8 };
                 let strength = (tick.vwap - tick.price).abs() / tick.vwap;
-                pub2.publish(Signal { buy, strength });
+                pub2.publish(Signal {
+                    strength,
+                    buy,
+                    _pad: [0; 7],
+                });
             }
             Err(TryRecvError::Empty) => core::hint::spin_loop(),
             Err(TryRecvError::Lagged { .. }) => {}
@@ -127,6 +141,7 @@ fn main() {
         pub0.publish(RawTick {
             price: 100.0 + (i as f64 * 0.01),
             volume: 100 + (i % 50),
+            _pad: 0,
         });
     }
 

@@ -1836,9 +1836,7 @@ fn arbitrary_capacity_publish_with() {
     let mut sub = s.subscribe();
 
     for i in 0u64..50 {
-        p.publish_with(|slot| {
-            slot.write(i);
-        });
+        p.publish_with(|| i);
     }
 
     for i in 0u64..50 {

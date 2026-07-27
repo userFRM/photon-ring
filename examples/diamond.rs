@@ -28,8 +28,8 @@ const LARGE_ORDER_THRESHOLD: u32 = 500;
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 struct Order {
-    id: u32,
     price: f64,
+    id: u32,
     quantity: u32,
 }
 
@@ -41,11 +41,14 @@ unsafe impl photon_ring::Pod for Order {}
 #[repr(C)]
 #[allow(dead_code)]
 struct TaggedOrder {
-    id: u32,
     price: f64,
+    id: u32,
     quantity: u32,
     /// 0 = Large, 1 = Small (enums are NOT Pod)
     tag: u32,
+    /// Explicit tail padding: `Pod` forbids implicit gaps, which are
+    /// uninitialised memory and undefined to read as part of a value.
+    _pad: u32,
 }
 
 // SAFETY: TaggedOrder is #[repr(C)] with all numeric fields;
@@ -74,6 +77,7 @@ fn main() {
                         price: order.price,
                         quantity: order.quantity,
                         tag: TAG_LARGE,
+                        _pad: 0,
                     });
                 }
             }
@@ -93,6 +97,7 @@ fn main() {
                         price: order.price,
                         quantity: order.quantity,
                         tag: TAG_SMALL,
+                        _pad: 0,
                     });
                 }
             }

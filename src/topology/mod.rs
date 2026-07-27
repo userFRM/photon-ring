@@ -291,6 +291,7 @@ mod tests {
         struct Output {
             doubled: f64,
             positive: u8,
+            _pad: [u8; 7],
         }
         // SAFETY: Output is #[repr(C)] with f64 and u8 fields;
         // every bit pattern is valid.
@@ -302,6 +303,7 @@ mod tests {
             .then(|inp: Input| Output {
                 doubled: inp.value * 2.0,
                 positive: if inp.value > 0.0 { 1 } else { 0 },
+                _pad: [0; 7],
             })
             .build();
 

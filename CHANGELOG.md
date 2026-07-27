@@ -90,6 +90,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Crate packages exclude `docs/`, `verification/`, and `scripts/`.
 
 ### Fixed
+- **`publish_with` could invoke undefined behaviour from safe code.** It handed
+  the closure a `&mut MaybeUninit<T>` and then assumed initialisation
+  unconditionally, so `publish_with(|_| {})` read uninitialised memory. `T: Pod`
+  makes every *initialised* bit pattern valid; it does not make uninitialised
+  bytes readable. The closure now returns the value instead, which cannot leave
+  the payload partly written. **Breaking** for callers that filled the slot in
+  place; return the value instead.
+- **`event_channel` shared `&T` across threads without requiring `T: Sync`.**
+  Several subscribers can hold a reference into the same slot at once, so a
+  payload with interior mutability let safe code race through those references.
+  The bound is now `T: Send + Sync + 'static`. **Breaking.**
+- **The derive macros generated `Pod` types with padding.** `Pod` forbids padding
+  because an implicit gap is uninitialised memory and the `atomic-slots` copy
+  reads the value as integer chunks; the generated wire structs routinely had it,
+  which Miri reports as undefined behaviour. `DerivePod` now proves at compile
+  time that a type's size equals the sum of its field sizes, and `DeriveMessage`
+  emits fields widest-first with explicit tail padding so the generated layout is
+  padding-free by construction. Wire structs gain a `_pad` field.
+  **Breaking** for code that names wire struct fields positionally.
+- **The examples taught padded `Pod` impls.** Reordered widest-first, with
+  explicit padding where ordering alone cannot close the gap.
 - **A newly registered subscriber could be lapped on a bounded channel.**
   `subscribe()` read the head cursor and registered its tracker as two separate
   steps. The publisher only rescans trackers when its cached slowest cursor says
@@ -158,6 +179,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tests.
 - Payload-scaling chart and surrounding prose presented a modeled competitor curve
   as measured data; the chart now plots only measured Photon Ring numbers.
+- Corrected two overclaims: the TLA+ model is checked by hand, not gated in CI
+  (Miri and loom are), and `Pod` covers only the zero- and one-element tuples.
+  The pipeline builder no longer claims capacity must be a power of two.
 - Stale docs corrected: the `wait.rs` "UMWAIT not yet implemented" note (it is
   implemented), `photon-ring-metrics`' "power of two" capacity comment, and the
   `Pod`/`Message` derive examples missing `#[repr(C)]`.

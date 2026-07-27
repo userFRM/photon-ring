@@ -53,7 +53,8 @@ impl PipelineBuilder {
 
     /// Set the ring capacity for all inter-stage channels.
     ///
-    /// Must be a power of two and at least 2.
+    /// Any capacity of at least 2. Powers of two index with a mask; other
+    /// sizes use a reciprocal multiply.
     pub fn capacity(mut self, cap: usize) -> Self {
         self.capacity = cap;
         self

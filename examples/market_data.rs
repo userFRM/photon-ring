@@ -14,14 +14,15 @@ use std::time::Instant;
 #[repr(C)]
 #[allow(dead_code)]
 struct Quote {
-    symbol_id: u32,
     price: f64,
-    volume: u32,
     ts_ns: u64,
+    symbol_id: u32,
+    volume: u32,
 }
 
-// SAFETY: Quote is #[repr(C)] with all numeric fields;
-// every bit pattern is a valid Quote.
+// SAFETY: Quote is #[repr(C)], every field is a plain numeric whose every bit
+// pattern is valid, and the fields are ordered widest-first so the layout has
+// no padding — `Pod` forbids implicit gaps, which are uninitialised memory.
 unsafe impl photon_ring::Pod for Quote {}
 
 fn main() {

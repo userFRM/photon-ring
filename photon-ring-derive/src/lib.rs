@@ -121,13 +121,28 @@ pub fn derive_pod(input: TokenStream) -> TokenStream {
         }
     });
 
+    let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
+
     let expanded = quote! {
         // Compile-time field checks
         #(#field_assertions)*
 
-        // Safety: all fields verified to be Pod via compile-time assertions above.
-        // The derive macro only applies to structs, and Pod requires that every
-        // bit pattern is valid — which holds when all fields are Pod.
+        // `Pod` forbids padding: an implicit gap is uninitialised memory, and the
+        // `atomic-slots` payload copy reads the value as integer chunks. Proving
+        // the size equals the sum of the field sizes is exactly the no-padding
+        // condition, and it fails the build rather than the run.
+        const _: () = {
+            let sum = 0usize #( + core::mem::size_of::<#field_types>() )*;
+            assert!(
+                core::mem::size_of::<#name>() == sum,
+                "Pod cannot be derived for a type with padding: add explicit \
+                 padding fields, or reorder fields so none is inserted",
+            );
+        };
+
+        // Safety: every field is Pod (asserted above), the type is #[repr(C)],
+        // and it carries no padding, so every byte is initialised and every bit
+        // pattern is a valid value.
         unsafe impl #impl_generics photon_ring::Pod for #name #ty_generics #where_clause {}
     };
 
@@ -176,6 +191,20 @@ fn type_name(ty: &Type) -> Option<String> {
         }
     }
     None
+}
+
+/// Width rank for layout ordering: lower sorts earlier, so wider first. Types
+/// the macro cannot size (arrays, user aliases) rank widest, since placing them
+/// first cannot introduce a gap ahead of a narrower field.
+fn align_rank(ty: &Type) -> u8 {
+    match type_name(ty).as_deref() {
+        Some("u128") | Some("i128") => 0,
+        Some("u64") | Some("i64") | Some("f64") | Some("usize") | Some("isize") => 1,
+        Some("u32") | Some("f32") => 2,
+        Some("u16") => 3,
+        Some("u8") => 4,
+        _ => 0,
+    }
 }
 
 /// Classify a field's type into a [`FieldKind`].
@@ -359,6 +388,9 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
     };
 
     let mut wire_fields = Vec::new();
+    let mut wire_types: Vec<proc_macro2::TokenStream> = Vec::new();
+    // Rank by width so fields can be emitted widest-first: no internal padding.
+    let mut wire_ranks: Vec<u8> = Vec::new();
     let mut to_wire = Vec::new();
     let mut from_wire = Vec::new();
     let mut assertions = Vec::new();
@@ -388,23 +420,31 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
         match kind {
             FieldKind::Passthrough => {
                 wire_fields.push(quote! { pub #fname: #fty });
+                wire_types.push(quote!(#fty));
+                wire_ranks.push(align_rank(fty));
                 to_wire.push(quote! { #fname: src.#fname });
                 from_wire.push(quote! { #fname: src.#fname });
             }
             FieldKind::Bool => {
                 wire_fields.push(quote! { pub #fname: u8 });
+                wire_types.push(quote!(u8));
+                wire_ranks.push(4);
                 to_wire.push(quote! { #fname: if src.#fname { 1 } else { 0 } });
                 from_wire.push(quote! { #fname: src.#fname != 0 });
             }
             FieldKind::Usize => {
                 has_usize_isize = true;
                 wire_fields.push(quote! { pub #fname: u64 });
+                wire_types.push(quote!(u64));
+                wire_ranks.push(1);
                 to_wire.push(quote! { #fname: src.#fname as u64 });
                 from_wire.push(quote! { #fname: src.#fname as usize });
             }
             FieldKind::Isize => {
                 has_usize_isize = true;
                 wire_fields.push(quote! { pub #fname: i64 });
+                wire_types.push(quote!(i64));
+                wire_ranks.push(1);
                 to_wire.push(quote! { #fname: src.#fname as i64 });
                 from_wire.push(quote! { #fname: src.#fname as isize });
             }
@@ -420,7 +460,17 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
                 let value_field = format_ident!("{}_value", fname);
                 let has_field = format_ident!("{}_has", fname);
                 wire_fields.push(quote! { pub #value_field: #wire_ty });
+                wire_types.push(quote!(#wire_ty));
+                wire_ranks.push(match wire_ty.to_string().as_str() {
+                    "u128" => 0,
+                    "u32" => 2,
+                    "u16" => 3,
+                    "u8" => 4,
+                    _ => 1,
+                });
                 wire_fields.push(quote! { pub #has_field: u8 });
+                wire_types.push(quote!(u8));
+                wire_ranks.push(4);
                 to_wire.push(quote! {
                     #value_field: match src.#fname {
                         Some(v) => #to_value,
@@ -442,6 +492,8 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
             FieldKind::Enum => {
                 has_enum_fields = true;
                 wire_fields.push(quote! { pub #fname: u8 });
+                wire_types.push(quote!(u8));
+                wire_ranks.push(4);
                 to_wire.push(quote! { #fname: src.#fname as u8 });
                 from_wire.push(quote! {
                     // SAFETY: This transmute converts a raw u8 back to the enum type.
@@ -557,26 +609,67 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
         }
     };
 
+    // Emit widest-first so the C layout cannot insert gaps between fields, then
+    // pad the tail to a whole number of alignment units. Together these make the
+    // generated struct padding-free, which `Pod` requires.
+    let mut ordered: Vec<usize> = (0..wire_fields.len()).collect();
+    ordered.sort_by_key(|&i| wire_ranks[i]);
+    let wire_fields: Vec<_> = ordered.iter().map(|&i| wire_fields[i].clone()).collect();
+    let wire_types: Vec<_> = ordered.iter().map(|&i| wire_types[i].clone()).collect();
+
+    let pad_const = format_ident!("__{}_TAIL_PAD", wire_name.to_string().to_uppercase());
+
     let expanded = quote! {
         // Compile-time assertions
         #(#assertions)*
+
+        #[doc(hidden)]
+        const #pad_const: usize = {
+            let sum = 0usize #( + core::mem::size_of::<#wire_types>() )*;
+            let align = { let mut a = 1usize; #( { let f = core::mem::align_of::<#wire_types>(); if f > a { a = f; } } )* a };
+            (align - sum % align) % align
+        };
 
         #wire_struct_doc
         #[repr(C)]
         #[derive(Clone, Copy)]
         pub struct #wire_name {
-            #(#wire_fields),*
+            #(#wire_fields,)*
+            /// Explicit tail padding. `Pod` forbids implicit padding, because an
+            /// uninitialised gap is undefined to read as part of a value; making
+            /// it a real field means every byte is initialised.
+            pub _pad: [u8; #pad_const],
         }
 
+        // `Pod` forbids padding, and a #[repr(C)] struct of mixed-width numerics
+        // readily acquires it. An implicit gap is uninitialised memory, and the
+        // `atomic-slots` payload copy reads the value as integer chunks, so a
+        // padded wire struct is undefined behaviour rather than merely wasteful.
+        // Size equal to the sum of the field sizes is exactly the no-padding
+        // condition. If this fails, order the source struct's fields widest
+        // first and the generated layout becomes padding-free.
+        const _: () = {
+            let sum = 0usize #( + core::mem::size_of::<#wire_types>() )* + #pad_const;
+            assert!(
+                core::mem::size_of::<#wire_name>() == sum,
+                "photon-ring: the generated wire struct has internal padding, which \
+                 is not a valid Pod. This happens when a passthrough field is wider \
+                 than the fields the macro places before it; order the source \
+                 struct's fields widest first.",
+            );
+        };
+
         // Safety: all fields of the wire struct are plain numeric types
-        // (u8, u32, u64, f32, f64, etc.) where every bit pattern is valid.
+        // (u8, u32, u64, f32, f64, etc.) where every bit pattern is valid, and
+        // the assertion above establishes there is no padding between them.
         unsafe impl photon_ring::Pod for #wire_name {}
 
         impl From<#name> for #wire_name {
             #[inline]
             fn from(src: #name) -> Self {
                 #wire_name {
-                    #(#to_wire),*
+                    #(#to_wire,)*
+                    _pad: [0; #pad_const],
                 }
             }
         }

@@ -1115,7 +1115,7 @@ Write protocol:                Read protocol:
           <tr><td class="td-label">Topic bus</td><td>Named topics, and a typed bus for per-topic payload types</td></tr>
           <tr><td class="td-label">Multi-producer</td><td>Yes</td></tr>
           <tr><td class="td-label"><code>no_std</code></td><td>Yes, with <code>alloc</code></td></tr>
-          <tr><td class="td-label">Verification</td><td>Miri, loom and a TLA+ model, gated in CI</td></tr>
+          <tr><td class="td-label">Verification</td><td>Miri and loom gated in CI; a TLA+ model of the seqlock checked by hand</td></tr>
         </tbody>
       </table>
     </div>

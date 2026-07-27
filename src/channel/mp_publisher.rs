@@ -85,9 +85,9 @@ impl<T: Pod> MpPublisher<T> {
 
     /// Publish by writing directly into the slot via a closure.
     ///
-    /// Like [`publish`](Self::publish), but the closure receives a
-    /// `&mut MaybeUninit<T>` for in-place construction, potentially
-    /// eliminating a write-side `memcpy`.
+    /// Like [`publish`](Self::publish), but takes a closure that builds the
+    /// value, which can let the compiler construct it directly into the
+    /// staging slot.
     ///
     /// The closure must not panic: the sequence number is already claimed
     /// when it runs, and a claim that never completes its write stalls every
@@ -102,11 +102,11 @@ impl<T: Pod> MpPublisher<T> {
     /// use std::mem::MaybeUninit;
     /// let (p, subs) = photon_ring::channel_mpmc::<u64>(64);
     /// let mut sub = subs.subscribe();
-    /// p.publish_with(|slot| { slot.write(42u64); });
+    /// p.publish_with(|| 42u64);
     /// assert_eq!(sub.try_recv(), Ok(42));
     /// ```
     #[inline]
-    pub fn publish_with(&self, f: impl FnOnce(&mut core::mem::MaybeUninit<T>)) {
+    pub fn publish_with(&self, f: impl FnOnce() -> T) {
         // SAFETY: next_seq_ptr points to ring.next_seq (MPMC ring), kept alive by self.ring.
         let next_seq_atomic = unsafe { &*self.next_seq_ptr };
         let seq = next_seq_atomic.fetch_add(1, Ordering::AcqRel);
