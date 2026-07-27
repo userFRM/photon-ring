@@ -6,7 +6,9 @@ Runtime-agnostic async wrappers for [photon-ring](https://github.com/userFRM/pho
 
 photon-ring's publisher has no waker infrastructure -- it writes to a slot, stores the stamp, and advances the cursor. There is no notification mechanism for async consumers.
 
-This crate bridges the gap with **yield-based polling**: the async subscriber tries `spin_budget` synchronous `try_recv()` calls per poll, then yields to the executor. This is cooperative spin-polling, not event-driven wakeup. The trade-off: one executor scheduling round-trip (~200-500 ns) per empty yield, but other tasks can run between polls.
+This crate bridges the gap with **yield-based polling**: the async subscriber tries `spin_budget` synchronous `try_recv()` calls per poll, then yields to the executor. This is cooperative spin-polling, not event-driven wakeup. The trade-off: one executor scheduling round-trip (~200-500 ns) per empty yield, and other tasks run between polls -- but the waiting task never sleeps.
+
+**Idle cost.** A task awaiting an idle channel is re-polled continuously and holds one core at 100% until a message arrives. Use this crate for streams that are rarely quiet. For idle-heavy workloads, run the subscriber on a dedicated thread (`photon_ring::topology::Consumer`) and hand results to your runtime through its own notification-based channel.
 
 No tokio, async-std, or any runtime dependency. Uses only `core::task` and `core::future::poll_fn`.
 
@@ -41,4 +43,4 @@ let count = async_sub.recv_batch(&mut buf).await;
 
 ## License
 
-Apache-2.0
+MIT OR Apache-2.0
